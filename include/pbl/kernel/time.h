@@ -63,6 +63,25 @@ time_t pbl_realtime(void);
 uint64_t pbl_realtime_ms(void);
 
 /**
+ * @brief Get the time since boot, in microseconds, at clock source resolution.
+ *
+ * Monotonic: unaffected by pbl_realtime_set().
+ */
+uint64_t pbl_uptime_us(void);
+
+/**
+ * @brief Get the wall clock time, in microseconds (same clock as pbl_realtime_ms()).
+ *
+ * @return UTC time in microseconds since the epoch.
+ */
+uint64_t pbl_realtime_us(void);
+
+/**
+ * @brief Wall clock time minus uptime, in microseconds; changes when the time is set.
+ */
+int64_t pbl_realtime_offset_us(void);
+
+/**
  * @brief Set the wall clock time.
  *
  * Callable before the scheduler starts.

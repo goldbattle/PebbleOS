@@ -2,7 +2,7 @@
   "_notes": [ "You need to increase the revision for each change of this file AND",
               "increase PROCESS_INFO_CURRENT_SDK_VERSION_MINOR in pebble_process_info.h"
             ],
-  "revision" : "116",
+  "revision" : "117",
   "version" : "2.0",
   "files": [
     "pebble/applib/status.h",
@@ -610,6 +610,34 @@
                   "type": "function",
                   "name": "accel_raw_data_service_subscribe",
                   "addedRevision": "15"
+                }, {
+                  "type": "type",
+                  "name": "ImuSamplingRate",
+                  "addedRevision": "117"
+                }, {
+                  "type": "type",
+                  "name": "ImuData",
+                  "addedRevision": "117"
+                }, {
+                  "type": "type",
+                  "name": "ImuDataHandler",
+                  "addedRevision": "117"
+                }, {
+                  "type": "type",
+                  "name": "ImuConfig",
+                  "addedRevision": "117"
+                }, {
+                  "type": "function",
+                  "name": "imu_data_service_subscribe",
+                  "addedRevision": "117"
+                }, {
+                  "type": "function",
+                  "name": "imu_data_service_unsubscribe",
+                  "addedRevision": "117"
+                }, {
+                  "type": "function",
+                  "name": "imu_data_service_subscribe_config",
+                  "addedRevision": "117"
                 }
               ]
             }, {
@@ -648,6 +676,22 @@
                       "type": "function",
                       "name": "compass_service_peek",
                       "addedRevision": "18"
+                  }, {
+                      "type": "type",
+                      "name": "MagSample",
+                      "addedRevision": "117"
+                  }, {
+                      "type": "type",
+                      "name": "MagDataHandler",
+                      "addedRevision": "117"
+                  }, {
+                      "type": "function",
+                      "name": "mag_data_service_subscribe",
+                      "addedRevision": "117"
+                  }, {
+                      "type": "function",
+                      "name": "mag_data_service_unsubscribe",
+                      "addedRevision": "117"
                   }
               ]
             }, {
@@ -2614,6 +2658,10 @@
               "type": "function",
               "name": "click_recognizer_get_button_id",
               "addedRevision": "0"
+            }, {
+              "type": "function",
+              "name": "click_recognizer_get_press_time_us",
+              "addedRevision": "117"
             }, {
               "type": "function",
               "name": "click_recognizer_is_repeating",
@@ -4853,6 +4901,10 @@
               "name": "time_ms",
               "implName": "time_ms_time32",
               "addedRevision": "59"
+            }, {
+              "type": "function",
+              "name": "time_us",
+              "addedRevision": "117"
             }, {
               "type": "function",
               "name": "time_start_of_today",

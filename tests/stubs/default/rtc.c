@@ -19,6 +19,10 @@ PBL_WEAK uint64_t pbl_realtime_ms(void) {
   return 0;
 }
 
+PBL_WEAK uint64_t pbl_realtime_us(void) {
+  return 0;
+}
+
 PBL_WEAK void pbl_realtime_set(time_t t) {
 }
 

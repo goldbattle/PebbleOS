@@ -83,6 +83,23 @@ typedef struct {
   uint64_t first_timestamp_us;
   /** Interval between samples, in microseconds. */
   uint32_t sampling_interval_us;
+  /**
+   * Optional. Per-sample acquisition times in microseconds since the epoch (e.g. from the
+   * sensor's own FIFO timestamps). When NULL, sample i is at
+   * first_timestamp_us + i * sampling_interval_us.
+   */
+  const uint64_t *timestamps_us;
+  /** Gyroscope source per axis, like axis[]; used when gyro_scale_den != 0. */
+  struct {
+    /** Byte offset of the little-endian int16 value within a sample. */
+    uint8_t offset;
+    /** Sign applied to the value, +1 or -1. */
+    int8_t sign;
+  } gyro_axis[3];
+  /** Raw-count to 0.1 deg/s numerator. */
+  int32_t gyro_scale_num;
+  /** Raw-count to 0.1 deg/s denominator; 0 when the batch carries no gyroscope data. */
+  int32_t gyro_scale_den;
 } AccelRawBatch;
 
 /** @brief Accelerometer event type. */
@@ -104,6 +121,18 @@ struct pbl_accel_event {
 };
 
 struct pbl_accel;
+
+/**
+ * @brief Sampling configuration, merged from all subscribers by the accelerometer service.
+ * Zero-initialized members keep the driver's defaults.
+ */
+struct pbl_accel_config {
+  /** Also sample the gyroscope, at the accelerometer's rate. Costs considerably more power. */
+  bool gyro;
+  /** Accelerometer full-scale range in milli-g, 0 for the driver default. Rounded up to a
+   * supported range (capped at the largest); a larger range has a coarser resolution. */
+  uint32_t range_mg;
+};
 
 /**
  * @brief Consumer of an accelerometer's samples and events.
@@ -150,6 +179,8 @@ struct pbl_accel_ops {
   int (*set_shake_sensitivity_high)(const struct pbl_accel *accel, bool high);
   /** Optional. Set the normal shake sensitivity, 0 to 100. */
   int (*set_shake_sensitivity_percent)(const struct pbl_accel *accel, uint8_t percent);
+  /** Optional. Apply a sampling configuration, see pbl_accel_set_config(). */
+  int (*set_config)(const struct pbl_accel *accel, const struct pbl_accel_config *config);
 };
 
 /** @brief Class runtime state. */
@@ -368,6 +399,16 @@ int pbl_accel_set_shake_sensitivity_high(const struct pbl_accel *accel, bool hig
  * @return 0 on success, or a negative errno.
  */
 int pbl_accel_set_shake_sensitivity_percent(const struct pbl_accel *accel, uint8_t percent);
+
+/**
+ * @brief Configure sampling (gyroscope, range), see struct pbl_accel_config.
+ * With the gyroscope on, batches carry gyroscope values alongside each accelerometer sample
+ * (AccelRawBatch.gyro_*). Batches always carry the range in effect (AccelRawBatch.scale_num).
+ * @param accel Accelerometer.
+ * @param config Configuration.
+ * @return 0 on success, -ENOTSUP if the driver is not configurable, or a negative errno.
+ */
+int pbl_accel_set_config(const struct pbl_accel *accel, const struct pbl_accel_config *config);
 
 /**
  * @brief Report a batch of samples to the listener.

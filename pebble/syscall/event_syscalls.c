@@ -144,6 +144,7 @@ static bool prv_event_type_subscribable_from_user(PebbleEventType type) {
     case PEBBLE_APP_WILL_CHANGE_FOCUS_EVENT:
     case PEBBLE_APP_DID_CHANGE_FOCUS_EVENT:
     case PEBBLE_COMPASS_DATA_EVENT:
+    case PEBBLE_MAG_SAMPLE_EVENT:
     case PEBBLE_PLUGIN_SERVICE_EVENT:
     case PEBBLE_WAKEUP_EVENT:
     case PEBBLE_VOICE_SERVICE_EVENT:

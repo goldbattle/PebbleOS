@@ -213,14 +213,38 @@ uint64_t timekeeping_idle_end(void) {
   return now_us;
 }
 
-uint64_t pbl_realtime_ms(void) {
+uint64_t pbl_realtime_us(void) {
   int64_t us;
 
   unsigned int key = arch_irq_lock();
   us = (int64_t)prv_uptime_us() + s_realtime_offset_us;
   arch_irq_unlock(key);
 
-  return (us > 0) ? (uint64_t)us / 1000U : 0U;
+  return (us > 0) ? (uint64_t)us : 0U;
+}
+
+uint64_t pbl_realtime_ms(void) {
+  return pbl_realtime_us() / 1000U;
+}
+
+uint64_t pbl_uptime_us(void) {
+  uint64_t us;
+
+  pbl_irq_lock();
+  us = prv_uptime_us();
+  pbl_irq_unlock();
+
+  return us;
+}
+
+int64_t pbl_realtime_offset_us(void) {
+  int64_t off;
+
+  pbl_irq_lock();
+  off = s_realtime_offset_us;
+  pbl_irq_unlock();
+
+  return off;
 }
 
 time_t pbl_realtime(void) {

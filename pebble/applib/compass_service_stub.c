@@ -43,6 +43,14 @@ void compass_service_subscribe(CompassHeadingHandler handler) {
   handler(data);
 }
 
+uint32_t mag_data_service_subscribe(uint32_t samples_per_update, uint32_t rate_hz,
+                                    MagDataHandler handler) {
+  return 0;
+}
+
+void mag_data_service_unsubscribe(void) {
+}
+
 void compass_service_unsubscribe(void) {
   // Nothing to do because we never handle the subscribe in the first place
 }

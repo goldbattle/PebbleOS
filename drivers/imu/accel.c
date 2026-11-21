@@ -186,6 +186,24 @@ int pbl_accel_set_double_tap_detection(const struct pbl_accel *accel, bool on) {
   return ret;
 }
 
+int pbl_accel_set_config(const struct pbl_accel *accel, const struct pbl_accel_config *config) {
+  int ret;
+
+  if (!pbl_device_is_ready(&accel->dev)) {
+    return -ENODEV;
+  }
+
+  if (accel->ops->set_config == nullptr) {
+    return -ENOTSUP;
+  }
+
+  pbl_accel_lock(accel);
+  ret = accel->ops->set_config(accel, config);
+  pbl_accel_unlock(accel);
+
+  return ret;
+}
+
 bool pbl_accel_get_double_tap_detection(const struct pbl_accel *accel) {
   return accel->state->double_tap_detection;
 }

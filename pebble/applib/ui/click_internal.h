@@ -50,6 +50,9 @@ typedef struct ClickRecognizer {
 
   uint8_t number_of_clicks_counted;
 
+  //! time_us() of the last physical press (down edge)
+  uint64_t press_time_us;
+
   AppTimer *hold_timer;
   AppTimer *multi_click_timer;
 } ClickRecognizer;
@@ -63,6 +66,9 @@ void click_recognizer_handle_button_up(ClickRecognizer *recognizer);
 
 //! Tell the particular recognizer that the associated button has been pressed.
 void click_recognizer_handle_button_down(ClickRecognizer *recognizer);
+
+//! Same, for a press whose physical edge happened at the given low 32 bits of time_us().
+void click_recognizer_handle_button_down_at(ClickRecognizer *recognizer, uint32_t timestamp_us_lo);
 
 //! Reset the state of a single recognizer, including timers.
 void click_recognizer_reset(ClickRecognizer *recognizer);

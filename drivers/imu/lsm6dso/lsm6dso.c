@@ -28,7 +28,15 @@ static const struct pbl_lsm6dso *s_dev;
 
 // Implementation notes:
 //
-// - Gyroscope is unused; only the accelerometer is configured.
+// - The gyroscope is off unless requested (set_config). It then runs at the accelerometer ODR in
+//   high-performance mode (ULP off), batched in the FIFO with the accelerometer.
+// - The full-scale range is CONFIG_ACCEL_LSM6DSO_SCALE_MG unless set_config requests another. The
+//   wake-up threshold is in units of the range, so like with ODR changes, shake sensitivity is
+//   lower while a larger range is in use.
+// - Every FIFO time slot carries the sensor's own timestamp (TIMESTAMP_EN, DEC_TS_BATCH=1). Each
+//   FIFO read also reads the live timestamp counter next to the system uptime, so every sample's
+//   time comes from the sensor's own clock, mapped onto uptime by a continuous line fit over those
+//   reads (pbl/kernel/clocksync.h). The fit starts from the factory trim (INTERNAL_FREQ_FINE).
 // - Peeking returns the last FIFO sample when sampling is active, otherwise a
 //   single-shot measurement is performed.
 // - Ultra-low-power mode (XL_ULP_EN) is always used (minimum power). It is
@@ -71,8 +79,22 @@ static const struct pbl_lsm6dso *s_dev;
 // Scale range for 16-bit two's complement samples
 #define LSM6DSO_S16_SCALE_RANGE PBL_BIT(15)
 
-// FIFO tag identifying an accelerometer (XL) sample
-#define LSM6DSO_FIFO_TAG_XL_NC 0x02U
+// FIFO tag byte: TAG_SENSOR in bits 7:3, TAG_CNT (time slot counter) in bits 2:1
+#define LSM6DSO_FIFO_TAG_SENSOR(tag) ((uint8_t)((tag) >> 3U))
+#define LSM6DSO_FIFO_TAG_CNT(tag)    ((uint8_t)(((tag) >> 1U) & 0x3U))
+#define LSM6DSO_FIFO_TAG_GY_NC       0x01U
+#define LSM6DSO_FIFO_TAG_XL_NC       0x02U
+#define LSM6DSO_FIFO_TAG_TS          0x04U
+
+// Nominal timestamp tick: 25 us; trimmed tick = 25 us / (1 + 0.0015 * INTERNAL_FREQ_FINE)
+#define LSM6DSO_TS_TICK_US_NOMINAL 25.0
+// Memory of the sensor-clock fit: long enough to average out I2C read jitter over ~60 FIFO reads,
+// short enough to follow oscillator drift with temperature
+#define LSM6DSO_TS_SYNC_MEMORY_S 10.0
+
+// Gyroscope: +-2000 dps, 70 mdps/LSB -> 0.1 dps units = raw * 7 / 10
+#define LSM6DSO_GYRO_SCALE_NUM 7
+#define LSM6DSO_GYRO_SCALE_DEN 10
 
 // Maximum FIFO watermark (WTM[8:0] is 9 bits)
 #define LSM6DSO_FIFO_WTM_MAX PBL_BIT_MASK(9)
@@ -85,6 +107,10 @@ static const struct pbl_lsm6dso *s_dev;
 #define LSM6DSO_INT1_CTRL         0x0DU
 #define LSM6DSO_WHO_AM_I          0x0FU
 #define LSM6DSO_CTRL1_XL          0x10U
+#define LSM6DSO_CTRL2_G           0x11U
+#define LSM6DSO_CTRL10_C          0x19U
+#define LSM6DSO_TIMESTAMP0        0x40U
+#define LSM6DSO_INTERNAL_FREQ_FINE 0x63U
 #define LSM6DSO_CTRL3_C           0x12U
 #define LSM6DSO_CTRL5_C           0x14U
 #define LSM6DSO_CTRL9_XL          0x18U
@@ -112,6 +138,16 @@ static const struct pbl_lsm6dso *s_dev;
 #define LSM6DSO_CTRL1_XL_ODR_52HZ  0x3U
 #define LSM6DSO_CTRL1_XL_ODR_104HZ 0x4U
 #define LSM6DSO_CTRL1_XL_ODR_208HZ 0x5U
+#define LSM6DSO_CTRL1_XL_ODR_416HZ 0x6U
+#define LSM6DSO_CTRL1_XL_ODR_833HZ 0x7U
+
+// CTRL2_G fields (ODR codes as CTRL1_XL)
+#define LSM6DSO_CTRL2_G_ODR_MASK PBL_GENMASK(7, 4)
+#define LSM6DSO_CTRL2_G_FS_MASK  PBL_GENMASK(3, 2)
+#define LSM6DSO_CTRL2_G_FS_2000  0x3U
+
+// CTRL10_C fields
+#define LSM6DSO_CTRL10_C_TIMESTAMP_EN PBL_BIT(5)
 #define LSM6DSO_CTRL1_XL_FS_MASK   PBL_GENMASK(3, 2)
 #define LSM6DSO_CTRL1_XL_FS_2G     0x0U
 #define LSM6DSO_CTRL1_XL_FS_16G    0x1U
@@ -151,11 +187,16 @@ static const struct pbl_lsm6dso *s_dev;
 #define LSM6DSO_FIFO_CTRL3_BDR_XL_52HZ  0x3U
 #define LSM6DSO_FIFO_CTRL3_BDR_XL_104HZ 0x4U
 #define LSM6DSO_FIFO_CTRL3_BDR_XL_208HZ 0x5U
+#define LSM6DSO_FIFO_CTRL3_BDR_XL_416HZ 0x6U
+#define LSM6DSO_FIFO_CTRL3_BDR_XL_833HZ 0x7U
+#define LSM6DSO_FIFO_CTRL3_BDR_GY_MASK  PBL_GENMASK(7, 4)
 
 // FIFO_CTRL4 fields
 #define LSM6DSO_FIFO_CTRL4_MODE_MASK   PBL_GENMASK(2, 0)
 #define LSM6DSO_FIFO_CTRL4_MODE_BYPASS 0x0U
 #define LSM6DSO_FIFO_CTRL4_MODE_STREAM 0x6U
+#define LSM6DSO_FIFO_CTRL4_DEC_TS_BATCH_MASK PBL_GENMASK(7, 6)
+#define LSM6DSO_FIFO_CTRL4_DEC_TS_BATCH_1    0x1U
 
 // FIFO_STATUS fields
 #define LSM6DSO_FIFO_STATUS2_DIFF_HI_MASK PBL_GENMASK(1, 0)
@@ -203,7 +244,7 @@ static bool prv_lsm6dso_read_fifo(uint16_t samples) {
 }
 
 static uint8_t prv_fs_bits(void) {
-  switch (CONFIG_ACCEL_LSM6DSO_SCALE_MG) {
+  switch (s_dev->state->range_mg) {
     case 2000U:
       return PBL_FIELD_PREP(LSM6DSO_CTRL1_XL_FS_MASK, LSM6DSO_CTRL1_XL_FS_2G);
     case 4000U:
@@ -228,7 +269,7 @@ static int16_t prv_axis_raw_mg(IMUCoordinateAxis axis, const uint8_t *raw) {
   offset = s_dev->axis_map[axis];
 
   val = s_dev->axis_dir[axis] * (int16_t)(((int32_t)prv_raw_to_s16(&raw[offset * 2U]) *
-                                           (int32_t)CONFIG_ACCEL_LSM6DSO_SCALE_MG) /
+                                           (int32_t)s_dev->state->range_mg) /
                                           (int32_t)LSM6DSO_S16_SCALE_RANGE);
 
   if (s_dev->state->rotated && (axis == AXIS_X || axis == AXIS_Y)) {
@@ -245,19 +286,132 @@ static void prv_raw_to_mg(const uint8_t *raw, struct pbl_accel_sample *sample) {
 }
 
 static uint64_t prv_get_curr_system_time_us(void) {
-  return pbl_realtime_ms() * 1000ULL;
+  return pbl_realtime_us();
 }
 
-// Convert and dispatch the samples already sitting in raw_sample_buf. Kept free of
-// device I/O so it can run after the I2C reads instead of in between them.
-static void prv_lsm6dso_process_samples(uint16_t num_samples, uint64_t timestamp_us) {
-  // Each FIFO word is a tag byte followed by 6 data bytes; point the batch at the
-  // first data byte and let the service step over the tags via the stride.
-  int8_t rotate = s_dev->state->rotated ? -1 : 1;
+static uint32_t prv_le32(const uint8_t *p) {
+  return (uint32_t)p[0] | ((uint32_t)p[1] << 8U) | ((uint32_t)p[2] << 16U) |
+         ((uint32_t)p[3] << 24U);
+}
+
+static uint8_t prv_words_per_slot(void) {
+  return s_dev->state->gyro_enabled ? 3U : 2U;  // [gyro] + accel + timestamp
+}
+
+//! Sensor ticks -> wall clock microseconds. The sensor counter runs on the LSM6DSO's own
+//! oscillator; the clocksync fit maps it onto monotonic uptime (offset and rate, refitted at every
+//! FIFO read), so a wall clock change (the phone setting the time) can't bend it.
+static uint64_t prv_ticks_to_realtime_us(uint32_t ts) {
+  int64_t us =
+      (int64_t)pbl_clocksync_to_uptime_us(&s_dev->state->sync, ts) + pbl_realtime_offset_us();
+  return (us > 0) ? (uint64_t)us : 0U;
+}
+
+//! Read the live timestamp counter between two uptime reads and feed the pair to the clock fit.
+static void prv_read_ts_ref(void) {
+  struct pbl_lsm6dso_state *st = s_dev->state;
+  uint8_t raw[4];
+  uint64_t before = pbl_uptime_us();
+  bool ok = prv_lsm6dso_read(LSM6DSO_TIMESTAMP0, raw, sizeof(raw));
+  uint64_t after = pbl_uptime_us();
+  if (!ok) {
+    PBL_LOG_ERR("Could not read TIMESTAMP registers");
+    return;  // the fit keeps its previous pairs
+  }
+  st->ts_ref = prv_le32(raw);
+  pbl_clocksync_add_pair(&st->sync, st->ts_ref, before, after);
+}
+
+//! Sensor ticks between samples at the current rate, to extrapolate a slot lacking a timestamp.
+static uint32_t prv_ticks_per_sample(void) {
+  return (uint32_t)((double)s_dev->state->sampling_interval_us /
+                    pbl_clocksync_us_per_tick(&s_dev->state->sync));
+}
+
+static void prv_emit_slot(void) {
+  struct pbl_lsm6dso_state *st = s_dev->state;
+  if (st->slot.has_xl && st->out_n < PBL_ARRAY_SIZE(st->out_ts_us)) {
+    uint32_t ts;
+    if (st->slot.has_ts) {
+      ts = st->slot.ts;
+    } else if (st->ts_last_valid) {
+      ts = st->ts_last + prv_ticks_per_sample();
+    } else {
+      ts = st->ts_ref;
+    }
+    st->ts_last = ts;
+    st->ts_last_valid = true;
+    memcpy(st->out_buf[st->out_n], st->slot.xl, 6);
+    if (st->slot.has_g) {
+      memcpy(&st->out_buf[st->out_n][6], st->slot.g, 6);
+    } else {
+      memset(&st->out_buf[st->out_n][6], 0, 6);
+    }
+    st->out_ts_us[st->out_n++] = prv_ticks_to_realtime_us(ts);
+  }
+  st->slot.valid = false;
+}
+
+//! Group the FIFO words read into time slots (TAG_CNT) and collect complete samples in out_buf.
+static void prv_lsm6dso_parse_fifo(uint16_t words) {
+  struct pbl_lsm6dso_state *st = s_dev->state;
+  st->out_n = 0;
+  for (uint16_t i = 0U; i < words; i++) {
+    const uint8_t *w = &st->raw_sample_buf[i * LSM6DSO_FIFO_WORD_SIZE_BYTES];
+    uint8_t sensor = LSM6DSO_FIFO_TAG_SENSOR(w[0]);
+    uint8_t cnt = LSM6DSO_FIFO_TAG_CNT(w[0]);
+    if (st->slot.valid && cnt != st->slot.cnt) {
+      prv_emit_slot();
+    }
+    if (!st->slot.valid) {
+      st->slot.valid = true;
+      st->slot.cnt = cnt;
+      st->slot.has_ts = st->slot.has_xl = st->slot.has_g = false;
+    }
+    switch (sensor) {
+      case LSM6DSO_FIFO_TAG_XL_NC:
+        memcpy(st->slot.xl, &w[1], 6);
+        st->slot.has_xl = true;
+        break;
+      case LSM6DSO_FIFO_TAG_GY_NC:
+        memcpy(st->slot.g, &w[1], 6);
+        st->slot.has_g = true;
+        break;
+      case LSM6DSO_FIFO_TAG_TS:
+        st->slot.ts = prv_le32(&w[1]);
+        st->slot.has_ts = true;
+        break;
+      default:  // configuration-change / temperature words
+        break;
+    }
+  }
+  // A complete last slot goes out now; a partial one waits for its remaining words
+  if (st->slot.valid && st->slot.has_xl && st->slot.has_ts &&
+      (st->slot.has_g || !st->gyro_enabled)) {
+    prv_emit_slot();
+  }
+}
+
+//! Forget any partial slot (the FIFO was flushed or reconfigured).
+static void prv_reset_slots(void) {
+  s_dev->state->slot.valid = false;
+  s_dev->state->ts_last_valid = false;
+  // Also restart the timestamp fit: while the stream was off the counter may have stopped, and
+  // the oscillator runs at a slightly different rate in ULP and high-performance (gyroscope) mode
+  pbl_clocksync_restart(&s_dev->state->sync);
+}
+
+// Dispatch the samples parsed into out_buf, each with its own hardware timestamp.
+static void prv_lsm6dso_process_samples(void) {
+  struct pbl_lsm6dso_state *st = s_dev->state;
+  if (st->out_n == 0U) {
+    return;
+  }
+  int8_t rotate = st->rotated ? -1 : 1;
   AccelRawBatch batch = {
-    .data = &s_dev->state->raw_sample_buf[1],
-    .num_samples = num_samples,
-    .stride = LSM6DSO_FIFO_WORD_SIZE_BYTES,
+    .data = st->out_buf[0],
+    .num_samples = st->out_n,
+    .stride = LSM6DSO_OUT_SAMPLE_BYTES,
     .axis =
         {
           [AXIS_X] =
@@ -268,17 +422,30 @@ static void prv_lsm6dso_process_samples(uint16_t num_samples, uint64_t timestamp
                .sign = (int8_t)(s_dev->axis_dir[AXIS_Y] * rotate)},
           [AXIS_Z] = {.offset = s_dev->axis_map[AXIS_Z] * 2U, .sign = s_dev->axis_dir[AXIS_Z]},
         },
-    .scale_num = CONFIG_ACCEL_LSM6DSO_SCALE_MG,
+    .scale_num = st->range_mg,
     .scale_den = LSM6DSO_S16_SCALE_RANGE,
-    .first_timestamp_us = timestamp_us,
-    .sampling_interval_us = s_dev->state->sampling_interval_us,
+    .first_timestamp_us = st->out_ts_us[0],
+    .sampling_interval_us = st->sampling_interval_us,
+    .timestamps_us = st->out_ts_us,
   };
+  if (st->gyro_enabled) {
+    for (IMUCoordinateAxis a = AXIS_X; a <= AXIS_Z; a++) {
+      batch.gyro_axis[a].offset = 6U + s_dev->axis_map[a] * 2U;
+      batch.gyro_axis[a].sign = batch.axis[a].sign;
+    }
+    batch.gyro_scale_num = LSM6DSO_GYRO_SCALE_NUM;
+    batch.gyro_scale_den = LSM6DSO_GYRO_SCALE_DEN;
+  }
 
   pbl_accel_report_samples(&s_dev->accel, &batch);
 }
 
 static uint8_t prv_get_bdr(uint32_t sampling_interval_us) {
-  if (sampling_interval_us >= 80000UL) {
+  if (sampling_interval_us > 0UL && sampling_interval_us <= 1200UL) {
+    return LSM6DSO_FIFO_CTRL3_BDR_XL_833HZ;
+  } else if (sampling_interval_us > 0UL && sampling_interval_us <= 2403UL) {
+    return LSM6DSO_FIFO_CTRL3_BDR_XL_416HZ;
+  } else if (sampling_interval_us >= 80000UL) {
     return LSM6DSO_FIFO_CTRL3_BDR_XL_12HZ5;
   } else if (sampling_interval_us >= 38461UL) {
     return LSM6DSO_FIFO_CTRL3_BDR_XL_26HZ;
@@ -304,8 +471,11 @@ static bool prv_lsm6dso_enable_fifo(uint16_t num_samples) {
     return ret;
   }
 
-  // Watermark threshold WTM[8:0]: low 8 bits in FIFO_CTRL1, MSB in FIFO_CTRL2
-  wtm = PBL_MIN(num_samples, LSM6DSO_FIFO_WTM_MAX);
+  prv_reset_slots();
+
+  // Watermark threshold WTM[8:0] counts FIFO words: every time slot carries an accelerometer word,
+  // a timestamp word and, with the gyroscope on, a gyroscope word
+  wtm = PBL_MIN((uint32_t)num_samples * prv_words_per_slot(), LSM6DSO_FIFO_WTM_MAX);
 
   val = PBL_FIELD_GET(PBL_GENMASK(7, 0), wtm);
   ret = prv_lsm6dso_write(LSM6DSO_FIFO_CTRL1, &val, 1);
@@ -321,17 +491,22 @@ static bool prv_lsm6dso_enable_fifo(uint16_t num_samples) {
     return ret;
   }
 
-  // Accelerometer batch data rate (gyro left not batched)
+  // Accelerometer (and gyroscope) batch data rate
   val = PBL_FIELD_PREP(LSM6DSO_FIFO_CTRL3_BDR_XL_MASK,
                        prv_get_bdr(s_dev->state->sampling_interval_us));
+  if (s_dev->state->gyro_enabled) {
+    val |= PBL_FIELD_PREP(LSM6DSO_FIFO_CTRL3_BDR_GY_MASK,
+                          prv_get_bdr(s_dev->state->sampling_interval_us));
+  }
   ret = prv_lsm6dso_write(LSM6DSO_FIFO_CTRL3, &val, 1);
   if (!ret) {
     PBL_LOG_ERR("Could not write FIFO_CTRL3 register");
     return ret;
   }
 
-  // Continuous (stream) mode
-  val = PBL_FIELD_PREP(LSM6DSO_FIFO_CTRL4_MODE_MASK, LSM6DSO_FIFO_CTRL4_MODE_STREAM);
+  // Continuous (stream) mode, with a timestamp batched in every time slot
+  val = PBL_FIELD_PREP(LSM6DSO_FIFO_CTRL4_MODE_MASK, LSM6DSO_FIFO_CTRL4_MODE_STREAM) |
+        PBL_FIELD_PREP(LSM6DSO_FIFO_CTRL4_DEC_TS_BATCH_MASK, LSM6DSO_FIFO_CTRL4_DEC_TS_BATCH_1);
   ret = prv_lsm6dso_write(LSM6DSO_FIFO_CTRL4, &val, 1);
   if (!ret) {
     PBL_LOG_ERR("Could not write FIFO_CTRL4 register");
@@ -365,7 +540,9 @@ static void prv_lsm6dso_drain_fifo(void) {
       return;
     }
 
-    prv_lsm6dso_process_samples(samples, prv_get_curr_system_time_us());
+    prv_read_ts_ref();
+    prv_lsm6dso_parse_fifo(samples);
+    prv_lsm6dso_process_samples();
     s_dev->state->last_fifo_read_tick = pbl_uptime_ticks();
   }
 }
@@ -422,7 +599,6 @@ static bool prv_lsm6dso_service_int1(enum int1_pass pass, bool *fifo_progress) {
   bool fifo_overrun = false;
   bool shake = false;
   uint16_t samples = 0U;
-  uint64_t timestamp_us = 0U;
 
   // Read all device registers back-to-back to keep the I2C critical section
   // short, then convert/dispatch below. The sample processing has no dependency
@@ -451,7 +627,7 @@ static bool prv_lsm6dso_service_int1(enum int1_pass pass, bool *fifo_progress) {
           PBL_LOG_ERR("Failed to read samples");
           return false;
         }
-        timestamp_us = prv_get_curr_system_time_us();
+        prv_read_ts_ref();
         s_dev->state->last_fifo_read_tick = pbl_uptime_ticks();
       }
     }
@@ -469,11 +645,13 @@ static bool prv_lsm6dso_service_int1(enum int1_pass pass, bool *fifo_progress) {
 
   if (fifo_overrun) {
     PBL_LOG_WRN("FIFO overrun detected, recovering");
+    prv_reset_slots();
     prv_lsm6dso_recover();
     action_taken = true;
     *fifo_progress = true;
   } else if (samples > 0U) {
-    prv_lsm6dso_process_samples(samples, timestamp_us);
+    prv_lsm6dso_parse_fifo(samples);
+    prv_lsm6dso_process_samples();
     action_taken = true;
     *fifo_progress = true;
   }
@@ -594,17 +772,35 @@ static bool prv_configure_odr(uint32_t sampling_interval_us, bool shake_detectio
   } else if (sampling_interval_us >= 9615UL) {
     odr = LSM6DSO_CTRL1_XL_ODR_104HZ;
     sampling_interval_us = 9615UL;
-  } else {
+  } else if (sampling_interval_us >= 4807UL || !s_dev->state->gyro_enabled) {
+    // Ultra-low-power mode tops out at 208 Hz
     odr = LSM6DSO_CTRL1_XL_ODR_208HZ;
     sampling_interval_us = 4807UL;
+  } else if (sampling_interval_us >= 2403UL) {
+    odr = LSM6DSO_CTRL1_XL_ODR_416HZ;
+    sampling_interval_us = 2403UL;
+  } else {
+    odr = LSM6DSO_CTRL1_XL_ODR_833HZ;
+    sampling_interval_us = 1200UL;
   }
 
   val = PBL_FIELD_PREP(LSM6DSO_CTRL1_XL_ODR_MASK, odr) | prv_fs_bits();
 
-  PBL_LOG_DBG("Configuring ODR to %" PRIu32 " ms (%" PRIu32 " mHz)", sampling_interval_us / 1000UL,
-              sampling_interval_us > 0UL ? 1000000000UL / sampling_interval_us : 0UL);
+  PBL_LOG_DBG("Configuring ODR to %" PRIu32 " ms (%" PRIu32 " mHz)",
+              (uint32_t)(sampling_interval_us / 1000UL),
+              (uint32_t)(sampling_interval_us > 0UL ? 1000000000UL / sampling_interval_us : 0UL));
 
   ret = prv_lsm6dso_write(LSM6DSO_CTRL1_XL, &val, 1);
+  if (!ret) {
+    return ret;
+  }
+
+  // Gyroscope at the same ODR, or powered down
+  val = (s_dev->state->gyro_enabled && odr != LSM6DSO_CTRL1_XL_ODR_OFF)
+            ? (PBL_FIELD_PREP(LSM6DSO_CTRL2_G_ODR_MASK, odr) |
+               PBL_FIELD_PREP(LSM6DSO_CTRL2_G_FS_MASK, LSM6DSO_CTRL2_G_FS_2000))
+            : 0U;
+  ret = prv_lsm6dso_write(LSM6DSO_CTRL2_G, &val, 1);
   if (!ret) {
     return ret;
   }
@@ -855,7 +1051,27 @@ static int prv_init(const struct pbl_accel *accel) {
     return -EIO;
   }
 
+  // Hardware timestamp counter, batched into the FIFO with every sample
+  val = LSM6DSO_CTRL10_C_TIMESTAMP_EN;
+  ret = prv_lsm6dso_write(LSM6DSO_CTRL10_C, &val, 1);
+  if (!ret) {
+    PBL_LOG_ERR("Could not write CTRL10_C register");
+    return -EIO;
+  }
+
+  // Factory oscillator trim: tick = 25 us / (1 + 0.0015 * INTERNAL_FREQ_FINE)
+  ret = prv_lsm6dso_read(LSM6DSO_INTERNAL_FREQ_FINE, &val, 1);
+  if (!ret) {
+    PBL_LOG_ERR("Could not read INTERNAL_FREQ_FINE register");
+    return -EIO;
+  }
+  double tick_us = LSM6DSO_TS_TICK_US_NOMINAL * 10000.0 / (double)(10000 + 15 * (int8_t)val);
+  pbl_clocksync_init(&s_dev->state->sync, tick_us, 32U, LSM6DSO_TS_SYNC_MEMORY_S);
+  PBL_LOG_INFO("Timestamp tick %" PRIu32 " ns (freq_fine %d)", (uint32_t)(tick_us * 1000.0),
+               (int8_t)val);
+
   // Configure scale (ODR off until sampling is requested)
+  s_dev->state->range_mg = CONFIG_ACCEL_LSM6DSO_SCALE_MG;
   val = PBL_FIELD_PREP(LSM6DSO_CTRL1_XL_ODR_MASK, LSM6DSO_CTRL1_XL_ODR_OFF) | prv_fs_bits();
   ret = prv_lsm6dso_write(LSM6DSO_CTRL1_XL, &val, 1);
   if (!ret) {
@@ -1172,6 +1388,66 @@ static int prv_set_rotated(const struct pbl_accel *accel, bool rotated) {
   return 0;
 }
 
+// Smallest supported range covering range_mg (0: the configured default)
+static uint16_t prv_range_mg(uint32_t range_mg) {
+  if (range_mg == 0U) {
+    return CONFIG_ACCEL_LSM6DSO_SCALE_MG;
+  }
+  uint16_t r = 2000U;
+  while (r < 16000U && r < range_mg) {
+    r *= 2U;
+  }
+  return r;
+}
+
+static int prv_set_config(const struct pbl_accel *accel, const struct pbl_accel_config *config) {
+  struct pbl_lsm6dso_state *st = s_dev->state;
+  bool on = config->gyro;
+  uint16_t range_mg = prv_range_mg(config->range_mg);
+  uint8_t val;
+
+  if (st->gyro_enabled == on && st->range_mg == range_mg) {
+    return 0;
+  }
+
+  prv_configure_int1(false, false);
+
+  // Salvage queued samples before the FIFO is reconfigured
+  if (st->num_samples > 0U) {
+    prv_lsm6dso_drain_fifo();
+  }
+
+  // XL_ULP_EN may only change with the accelerometer powered down, and excludes the gyroscope
+  val = PBL_FIELD_PREP(LSM6DSO_CTRL1_XL_ODR_MASK, LSM6DSO_CTRL1_XL_ODR_OFF) | prv_fs_bits();
+  if (!prv_lsm6dso_write(LSM6DSO_CTRL1_XL, &val, 1)) {
+    return -EIO;
+  }
+  val = 0U;
+  if (!prv_lsm6dso_write(LSM6DSO_CTRL2_G, &val, 1)) {
+    return -EIO;
+  }
+  val = on ? 0U : LSM6DSO_CTRL5_C_XL_ULP_EN;
+  if (!prv_lsm6dso_write(LSM6DSO_CTRL5_C, &val, 1)) {
+    return -EIO;
+  }
+  st->gyro_enabled = on;
+  st->range_mg = range_mg;
+
+  if (!prv_configure_odr(st->sampling_interval_us, st->shake_detection_enabled)) {
+    return -EIO;
+  }
+  if (st->num_samples > 0U && !prv_lsm6dso_enable_fifo(st->num_samples)) {
+    return -EIO;
+  }
+  if (!prv_configure_int1(st->shake_detection_enabled, st->num_samples > 0U)) {
+    return -EIO;
+  }
+  prv_update_int1_watchdog();
+
+  PBL_LOG_INFO("Gyroscope %s, range %u mg", on ? "on" : "off", range_mg);
+  return 0;
+}
+
 const struct pbl_accel_ops pbl_lsm6dso_ops = {
   .init = prv_init,
   .set_rotated = prv_set_rotated,
@@ -1183,6 +1459,7 @@ const struct pbl_accel_ops pbl_lsm6dso_ops = {
   .set_shake_detection = prv_set_shake_detection,
   .set_shake_sensitivity_high = prv_set_shake_sensitivity_high,
   .set_shake_sensitivity_percent = prv_set_shake_sensitivity_percent,
+  .set_config = prv_set_config,
 };
 
 #include PBL_DT_INSTANCES(st_lsm6dso)

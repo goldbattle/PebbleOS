@@ -776,6 +776,8 @@ exit:
 // internal storage.read_offset to match the # of bytes already consumed without consuming any more.
 // This special mode is only used by dls_storage_rebuild() when we are resurrecting old
 // sessions from the file system.
+// Items can span several chunks, so this keeps consuming chunks until it ends on an item
+// boundary: the remaining data must start with a whole item.
 int32_t dls_storage_consume(DataLoggingSession *logging_session, int32_t num_bytes) {
   prv_assert_valid_task();
 
@@ -794,7 +796,8 @@ int32_t dls_storage_consume(DataLoggingSession *logging_session, int32_t num_byt
   }
 
   bool reset_read_offset = (num_bytes == 0);
-  while (reset_read_offset || consumed_bytes < num_bytes) {
+  while (reset_read_offset || consumed_bytes < num_bytes ||
+         (consumed_bytes % logging_session->item_size) != 0) {
     DLSChunkHeader chunk_hdr;
 
     // Reached the end of the file?

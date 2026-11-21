@@ -608,3 +608,39 @@ void test_data_logging__send_session_medium(void) {
 void test_data_logging__send_session_small(void) {
   prv_endpoint_test(true /*buffered*/, 19, 45);
 }
+
+// ----------------------------------------------------------------------------------------
+// Fill the store with items whose size doesn't divide the chunk size, so they span several
+// chunks. Dropping old data must remove whole items: what is left starts on an item boundary.
+void test_data_logging__full_store_drops_whole_items(void) {
+  enum { ITEM_SIZE = 296, WORDS = ITEM_SIZE / sizeof(uint32_t) };
+  DataLoggingSessionRef logging_session =
+      data_logging_create(0, DATA_LOGGING_BYTE_ARRAY, ITEM_SIZE, false);
+  cl_assert(logging_session);
+  fake_system_task_callbacks_invoke_pending();
+
+  // Each item repeats its own index in every word
+  const uint32_t num_items = 2 * DLS_MAX_DATA_BYTES / ITEM_SIZE;
+  for (uint32_t i = 0; i < num_items; i++) {
+    uint32_t item[WORDS];
+    for (int w = 0; w < WORDS; w++) {
+      item[w] = i;
+    }
+    prv_data_log_chain(logging_session, (uint8_t *)item, ITEM_SIZE, 1);
+  }
+
+  const uint32_t num_bytes = dls_test_get_num_bytes(logging_session);
+  cl_assert(num_bytes < num_items * ITEM_SIZE); // old data was dropped
+  cl_assert_equal_i(num_bytes % ITEM_SIZE, 0);
+
+  uint32_t *buf = malloc(num_bytes);
+  cl_assert_equal_i(dls_test_read(logging_session, (uint8_t *)buf, num_bytes), num_bytes);
+  const uint32_t first = buf[0];
+  for (uint32_t n = 0; n < num_bytes / ITEM_SIZE; n++) {
+    for (int w = 0; w < WORDS; w++) {
+      cl_assert_equal_i(buf[n * WORDS + w], first + n);
+    }
+  }
+  cl_assert_equal_i(first + num_bytes / ITEM_SIZE, num_items);
+  free(buf);
+}

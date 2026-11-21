@@ -47,3 +47,52 @@ typedef struct PBL_PACKED AccelData {
   /** timestamp, in milliseconds */
   uint64_t timestamp;
 } AccelData;
+
+/** @brief IMU sampling rates, in Hz (accelerometer, and gyroscope when enabled) */
+typedef enum {
+  /** 104 HZ sampling rate */
+  IMU_SAMPLING_104HZ = 104,
+  /** 208 HZ sampling rate */
+  IMU_SAMPLING_208HZ = 208,
+  /** 416 HZ sampling rate (requires the gyroscope) */
+  IMU_SAMPLING_416HZ = 416,
+} ImuSamplingRate;
+
+/**
+ * @brief IMU data service configuration, see imu_data_service_subscribe_config().
+ * Zero-initialize it (designated initializers), then set what you need: every member left at 0
+ * keeps its default, so members added in later SDKs leave existing apps unchanged. New members
+ * are only ever appended.
+ */
+typedef struct {
+  /** Number of samples to buffer before the handler is called (required) */
+  uint32_t samples_per_update;
+  /** Sampling rate (required) */
+  ImuSamplingRate rate;
+  /** Also sample the gyroscope (higher power use). Default: off */
+  bool gyro;
+  /** Accelerometer full-scale range in g: 2, 4, 8 or 16, rounded up to one the sensor supports.
+   * A larger range has a coarser resolution. Default (0): the system range */
+  uint8_t accel_range_g;
+} ImuConfig;
+
+/**
+ * @brief One IMU sample, with the time the sensor acquired it.
+ */
+typedef struct PBL_PACKED ImuData {
+  /** acceleration along the x axis, in milli-g */
+  int16_t ax;
+  /** acceleration along the y axis, in milli-g */
+  int16_t ay;
+  /** acceleration along the z axis, in milli-g */
+  int16_t az;
+  /** angular rate around the x axis, in 0.1 degrees per second (0 if the gyroscope is off) */
+  int16_t gx;
+  /** angular rate around the y axis, in 0.1 degrees per second */
+  int16_t gy;
+  /** angular rate around the z axis, in 0.1 degrees per second */
+  int16_t gz;
+  /** acquisition time from the sensor's own timestamp, in microseconds since the epoch, on the
+   * same clock as time_us() and time_ms() */
+  uint64_t timestamp_us;
+} ImuData;

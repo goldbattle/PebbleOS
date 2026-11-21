@@ -234,6 +234,13 @@ ClickConfig *click_recognizer_get_config(ClickRecognizerRef recognizer);
 //! @return the ButtonId of the click recognizer
 ButtonId click_recognizer_get_button_id(ClickRecognizerRef recognizer);
 
+//! Time of the physical button press (down edge) of the click being handled, on the time_us()
+//! clock. Valid for single clicks (which fire on release), multi clicks (the last press), long
+//! clicks and repeats.
+//! @param recognizer The click recognizer handling the click
+//! @return the press time in microseconds
+uint64_t click_recognizer_get_press_time_us(ClickRecognizerRef recognizer);
+
 //! Is this a repeating click.
 //! You can use this inside a click handler implementation to find out whether this is a repeating
 //! click or not.

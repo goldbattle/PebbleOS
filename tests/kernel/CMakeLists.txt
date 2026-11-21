@@ -105,3 +105,10 @@ pbl_clar_test(test_print
   DEFINES
     CONFIG_KERNEL_PRINT_BUFFER_SIZE=128
 )
+
+pbl_clar_test(test_clocksync
+  SOURCES
+    kernel/clocksync.c
+  DEFINES
+    PBL_NO_LINKER_SCRIPT
+)

@@ -141,6 +141,13 @@ int sys_accel_manager_set_sample_buffer(AccelManagerState *state, AccelRawData *
   return 0;
 }
 
+// The service now hands the manager an ImuData buffer; the fake only tracks the bookkeeping
+int sys_accel_manager_set_imu_buffer(AccelManagerState *state, ImuData *buffer,
+                                     uint32_t samples_per_update, bool gyro,
+                                     uint32_t accel_range_mg) {
+  return sys_accel_manager_set_sample_buffer(state, (AccelRawData *)buffer, samples_per_update);
+}
+
 uint32_t sys_accel_manager_get_num_samples(AccelManagerState *state, uint64_t *timestamp_ms,
                                            uint32_t *generation) {
   prv_assert_live(state);
@@ -432,10 +439,14 @@ void test_accel_service__subscribing_again_resets_the_sampling_rate(void) {
   accel_data_service_subscribe(2, prv_data_handler);
   accel_service_set_sampling_rate(ACCEL_SAMPLING_100HZ);
   accel_data_service_subscribe(2, prv_data_handler);
+  // Samples carry their own acquisition times now; the service no longer spaces them by the rate
+  s_app_state.raw_data[0].timestamp_us = 1000000;
+  s_app_state.raw_data[1].timestamp_us = 1040000;
 
   prv_deliver(2);
 
-  cl_assert_equal_i(s_timestamps[1] - s_timestamps[0], 40);
+  cl_assert_equal_i(s_timestamps[0], 1000);
+  cl_assert_equal_i(s_timestamps[1], 1040);
 }
 
 //! A rate the manager turns down isn't kept. The samples still arrive at the old rate, so spacing
@@ -444,10 +455,13 @@ void test_accel_service__a_rejected_sampling_rate_is_not_kept(void) {
   accel_data_service_subscribe(2, prv_data_handler);
   accel_service_set_sampling_rate(ACCEL_SAMPLING_100HZ);
   accel_service_set_sampling_rate((AccelSamplingRate)30);
+  s_app_state.raw_data[0].timestamp_us = 2000000;
+  s_app_state.raw_data[1].timestamp_us = 2010000;
 
   prv_deliver(2);
 
-  cl_assert_equal_i(s_timestamps[1] - s_timestamps[0], 10);
+  cl_assert_equal_i(s_timestamps[0], 2000);
+  cl_assert_equal_i(s_timestamps[1], 2010);
 }
 
 // Changing the batch size
@@ -644,7 +658,7 @@ void test_accel_service__a_kernel_session_deleted_in_its_handler_is_freed_at_onc
 //! A raw handler can still read its buffer after changing its batch size
 void test_accel_service__a_raw_handler_keeps_its_buffer_after_changing_its_batch_size(void) {
   accel_raw_data_service_subscribe(1, prv_rebatching_raw_handler);
-  s_app_state.raw_data[0].x = 7;
+  s_app_state.raw_data[0].ax = 7;
 
   prv_deliver(1);
 
@@ -654,7 +668,7 @@ void test_accel_service__a_raw_handler_keeps_its_buffer_after_changing_its_batch
 //! The same when the raw handler unsubscribes
 void test_accel_service__a_raw_handler_keeps_its_buffer_after_unsubscribing(void) {
   accel_raw_data_service_subscribe(1, prv_unsubscribing_raw_handler);
-  s_app_state.raw_data[0].x = 7;
+  s_app_state.raw_data[0].ax = 7;
 
   prv_deliver(1);
 
@@ -664,7 +678,7 @@ void test_accel_service__a_raw_handler_keeps_its_buffer_after_unsubscribing(void
 //! The same when the raw handler subscribes again, which replaces the subscription and its buffer
 void test_accel_service__a_raw_handler_keeps_its_buffer_after_subscribing_again(void) {
   accel_raw_data_service_subscribe(1, prv_resubscribing_raw_handler);
-  s_app_state.raw_data[0].x = 7;
+  s_app_state.raw_data[0].ax = 7;
 
   prv_deliver(1);
 
@@ -674,7 +688,7 @@ void test_accel_service__a_raw_handler_keeps_its_buffer_after_subscribing_again(
 //! The same after two changes in one handler
 void test_accel_service__a_raw_handler_keeps_its_buffer_after_two_changes(void) {
   accel_raw_data_service_subscribe(1, prv_twice_rebatching_raw_handler);
-  s_app_state.raw_data[0].x = 7;
+  s_app_state.raw_data[0].ax = 7;
 
   prv_deliver(1);
 
@@ -684,7 +698,7 @@ void test_accel_service__a_raw_handler_keeps_its_buffer_after_two_changes(void) 
 //! The deprecated raw handler is handed the buffer itself too
 void test_accel_service__a_deprecated_raw_handler_keeps_its_buffer_after_a_change(void) {
   accel_data_service_subscribe__deprecated(1, prv_rebatching_deprecated_handler);
-  s_app_state.raw_data[0].x = 7;
+  s_app_state.raw_data[0].ax = 7;
 
   prv_deliver(1);
 
@@ -696,7 +710,7 @@ void test_accel_service__a_raw_handler_keeps_its_buffer_after_deleting_its_sessi
   stub_pebble_tasks_set_current(PebbleTask_SysWorkq);
   s_session = accel_session_create();
   accel_session_raw_data_subscribe(s_session, ACCEL_SAMPLING_25HZ, 1, prv_deleting_raw_handler);
-  s_session->raw_data[0].x = 7;
+  s_session->raw_data[0].ax = 7;
 
   prv_deliver(1);
 

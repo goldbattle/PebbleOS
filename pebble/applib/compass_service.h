@@ -51,6 +51,39 @@ int compass_service_set_heading_filter(CompassHeading filter);
 //! @param heading copy of last recorded heading
 typedef void (*CompassHeadingHandler)(CompassHeadingData heading);
 
+//! One magnetometer sample in the watch frame, units of 0.1 microtesla (= milligauss)
+typedef struct PBL_PACKED MagSample {
+  int16_t x, y, z;
+  //! Sensor temperature in 0.01 degrees C, INT16_MIN if unavailable
+  int16_t temp_c100;
+  //! 1 if the compass service reports CompassStatusCalibrated. The calibration only runs while
+  //! some process is subscribed to the compass service, otherwise this stays 0.
+  uint8_t calibrated;
+  //! Measurement time on the time_us() clock, accurate to about +-(half the sensor polling
+  //! period), 5 ms at 25 Hz
+  uint64_t timestamp_us;
+} MagSample;
+
+//! Callback type for batches of raw magnetometer samples
+//! @param samples the samples, oldest first, valid for the duration of the call
+//! @param num_samples the number of samples
+typedef void (*MagDataHandler)(MagSample *samples, uint32_t num_samples);
+
+//! Batches of samples_per_update raw magnetometer samples at about rate_hz, each stamped with its
+//! measurement time on the time_us() clock. Replaces any previous magnetometer data subscription.
+//! The magnetometer keeps running at the requested rate (alongside the compass service if both
+//! are used, at the faster of the two rates) until mag_data_service_unsubscribe() or app exit.
+//! If the app is too slow to keep up, the newest samples are dropped.
+//! @param samples_per_update samples per handler call, clipped to 1..64
+//! @param rate_hz the requested rate in Hz, clipped to 1..100
+//! @param handler the callback
+//! @return the rate in use, or 0 if there is no magnetometer (or not called from an app)
+uint32_t mag_data_service_subscribe(uint32_t samples_per_update, uint32_t rate_hz,
+                                    MagDataHandler handler);
+
+//! Unsubscribe from the magnetometer data service
+void mag_data_service_unsubscribe(void);
+
 //! Subscribe to the compass heading event service. Once subscribed, the handler
 //! gets called every time the angular distance relative to the previous value
 //! exceeds the configured filter.

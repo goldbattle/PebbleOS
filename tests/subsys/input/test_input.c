@@ -7,6 +7,11 @@
 
 #define MAX_EVENTS 8
 
+// pbl_input_report() stamps events with the kernel clock
+uint64_t pbl_realtime_us(void) {
+  return 0;
+}
+
 struct listener {
   struct pbl_input_event events[MAX_EVENTS];
   int count;

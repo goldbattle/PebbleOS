@@ -152,6 +152,10 @@ uint16_t time_ms(time_t *tloc, uint16_t *out_ms) {
   return (t_ms);
 }
 
+uint64_t time_us(void) {
+  return sys_get_time_us();
+}
+
 uint16_t time_ms_time32(pbl_time32_t *tloc, uint16_t *out_ms) {
   time_t t_s;
   const uint16_t t_ms = time_ms(&t_s, out_ms);

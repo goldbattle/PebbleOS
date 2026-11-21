@@ -95,7 +95,7 @@ int sys_accel_manager_peek(AccelData *accel_data);
  * @return Subscription allocated on the kernel heap; free it with
  *         sys_accel_manager_data_unsubscribe().
  */
-AccelManagerState *sys_accel_manager_data_subscribe(AccelSamplingRate rate,
+AccelManagerState *sys_accel_manager_data_subscribe(uint32_t rate,
                                                     AccelDataReadyCallback data_cb, void *context,
                                                     PebbleTask handler_task);
 
@@ -152,6 +152,15 @@ uint32_t accel_manager_set_jitterfree_sampling_rate(AccelManagerState *state,
  * @retval 0 Success.
  * @retval -1 @p samples_per_update is too large.
  */
+/**
+ * @brief Like sys_accel_manager_set_sample_buffer(), with full samples: accelerometer, gyroscope
+ * (when @p gyro) and the per-sample acquisition time. @p accel_range_mg is the accelerometer
+ * full-scale range wanted, 0 for the default (struct pbl_accel_config.range_mg).
+ */
+int sys_accel_manager_set_imu_buffer(AccelManagerState *state, ImuData *buffer,
+                                     uint32_t samples_per_update, bool gyro,
+                                     uint32_t accel_range_mg);
+
 int sys_accel_manager_set_sample_buffer(AccelManagerState *state, AccelRawData *buffer,
                                         uint32_t samples_per_update);
 

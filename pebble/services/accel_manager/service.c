@@ -51,7 +51,9 @@ typedef struct AccelManagerState {
   void *data_cb_context;
 
   uint64_t timestamp_ms;    // timestamp of first item in the buffer
-  AccelRawData *raw_buffer; // raw buffer allocated by subscriber
+  AccelRawData *raw_buffer; // raw buffer allocated by subscriber (legacy format), or
+  ImuData *imu_buffer;      // full-sample buffer allocated by subscriber
+  struct pbl_accel_config config;  // what the subscriber asks of the sensor
   uint8_t num_samples;      // number of samples in raw_buffer
   bool event_posted;        // True while a data event is queued or running
   uint32_t generation;      // bumped on every buffer change
@@ -59,9 +61,11 @@ typedef struct AccelManagerState {
 
 typedef struct {
   AccelRawData rawdata;
-  // The exact time the sample was collected can be recovered by:
-  //   time_sample_collected = s_last_empty_timestamp_ms + timestamp_delta_ms
-  uint16_t timestamp_delta_ms;
+  // Angular rate in 0.1 deg/s (0 when the gyroscope is off)
+  int16_t gyro[3];
+  // The exact time the sample was acquired:
+  //   time_sample_collected = s_last_empty_timestamp_us + timestamp_delta_us
+  uint32_t timestamp_delta_us;
 } AccelManagerBufferData;
 static_assert(offsetof(AccelManagerBufferData, rawdata) == 0,
               "AccelRawData must be first entry in AccelManagerBufferData struct");
@@ -84,7 +88,7 @@ static struct pbl_shared_cbuf s_buffer;
 static uint8_t s_buffer_storage[PBL_MAX(200, 2 * CONFIG_SERVICE_ACCEL_MANAGER_BATCH_SAMPLES + 50) *
                                 sizeof(AccelManagerBufferData)];
 
-static uint64_t s_last_empty_timestamp_ms = 0;
+static uint64_t s_last_empty_timestamp_us = 0;
 
 //! Whether the accel manager is enabled. When disabled (e.g. during factory reset via
 //! RunLevel_BareMinimum), the accelerometer hardware is powered down and callbacks are ignored.
@@ -228,6 +232,15 @@ static void prv_setup_subsampling(uint32_t sampling_interval) {
 //! subscribers, chooses the lowest power configuration settings
 static void prv_update_driver_config(void) {
   // TODO: Add low power support
+  struct pbl_accel_config config = {0};
+  for (AccelManagerState *s = (AccelManagerState *)s_data_subscribers; s;
+       s = (AccelManagerState *)s->list_node.next) {
+    config.gyro = config.gyro || s->config.gyro;
+    config.range_mg = PBL_MAX(config.range_mg, s->config.range_mg);
+  }
+  // Before the interval: the gyroscope changes the power mode and so the supported rates
+  (void)pbl_accel_set_config(ACCEL, &config);
+
   uint32_t lowest_interval_us;
   uint32_t max_n_samples;
   uint32_t max_batch = prv_get_sample_interval_info(&lowest_interval_us, &max_n_samples);
@@ -285,7 +298,7 @@ static void prv_dispatch_data(bool post_event) {
   AccelManagerState *state = (AccelManagerState *)s_data_subscribers;
   while (state) {
     // drop the data if none are wanted or there's no buffer, so the subscriber doesn't fall behind
-    if (state->samples_per_update == 0 || !state->raw_buffer) {
+    if (state->samples_per_update == 0 || (!state->raw_buffer && !state->imu_buffer)) {
       uint16_t len =
           pbl_shared_cbuf_get_read_space_remaining(&s_buffer, &state->buffer_client.buffer_client);
       pbl_shared_cbuf_consume(&s_buffer, &state->buffer_client.buffer_client, len);
@@ -310,11 +323,20 @@ static void prv_dispatch_data(bool post_event) {
       // does. Therefore, we provide the real time for the first sample. In
       // the future, we could phase out legacy accel code and provide the
       // exact timestamp with every sample
+      uint64_t ts_us = s_last_empty_timestamp_us + data.timestamp_delta_us;
       if (state->num_samples == 0) {
-        state->timestamp_ms = s_last_empty_timestamp_ms + data.timestamp_delta_ms;
+        state->timestamp_ms = ts_us / 1000;
       }
 
-      memcpy(state->raw_buffer + state->num_samples, &data, sizeof(AccelRawData));
+      if (state->imu_buffer) {
+        state->imu_buffer[state->num_samples] = (ImuData){
+          .ax = data.rawdata.x, .ay = data.rawdata.y, .az = data.rawdata.z,
+          .gx = data.gyro[0], .gy = data.gyro[1], .gz = data.gyro[2],
+          .timestamp_us = ts_us,
+        };
+      } else {
+        memcpy(state->raw_buffer + state->num_samples, &data, sizeof(AccelRawData));
+      }
       state->num_samples++;
     }
 
@@ -430,19 +452,23 @@ PBL_SYSCALL(int, sys_accel_manager_peek, (OUT, AccelData *, accel_data)) {
   return result;
 }
 
-static bool prv_is_supported_rate(AccelSamplingRate rate) {
+//! Rates in Hz as uint32_t: the IMU rates do not fit the AccelSamplingRate enum type
+static bool prv_is_supported_rate(uint32_t rate) {
   switch (rate) {
     case ACCEL_SAMPLING_10HZ:
     case ACCEL_SAMPLING_25HZ:
     case ACCEL_SAMPLING_50HZ:
     case ACCEL_SAMPLING_100HZ:
+    case (uint32_t)IMU_SAMPLING_104HZ:
+    case (uint32_t)IMU_SAMPLING_208HZ:
+    case (uint32_t)IMU_SAMPLING_416HZ:
       return true;
     default:
       return false;
   }
 }
 
-PBL_SYSCALL(AccelManagerState *, sys_accel_manager_data_subscribe, (VAL, AccelSamplingRate, rate),
+PBL_SYSCALL(AccelManagerState *, sys_accel_manager_data_subscribe, (VAL, uint32_t, rate),
             (VAL, AccelDataReadyCallback, data_cb), (VAL, void *, context),
             (VAL, PebbleTask, handler_task)) {
   AccelManagerState *state;
@@ -620,6 +646,35 @@ PBL_SYSCALL(int, sys_accel_manager_set_sample_buffer, (VAL, AccelManagerState *,
   pbl_accel_lock(ACCEL);
   {
     state->raw_buffer = (samples_per_update > 0) ? buffer : nullptr;
+    state->imu_buffer = nullptr;
+    state->config = (struct pbl_accel_config){0};
+    state->samples_per_update = samples_per_update;
+    state->num_samples = 0;
+    state->generation++;
+    prv_update_driver_config();
+  }
+  pbl_accel_unlock(ACCEL);
+
+  return 0;
+}
+
+PBL_SYSCALL(int, sys_accel_manager_set_imu_buffer, (VAL, AccelManagerState *, state),
+            (VAL, ImuData *, buffer), (VAL, uint32_t, samples_per_update), (VAL, bool, gyro),
+            (VAL, uint32_t, accel_range_mg)) {
+  prv_assert_state_from_user(state, from_user);
+  if (samples_per_update > pbl_accel_get_max_num_samples(ACCEL)) {
+    return -1;
+  }
+
+  if (from_user && samples_per_update > 0) {
+    pbl_syscall_verify_user(buffer, samples_per_update * sizeof(ImuData));
+  }
+
+  pbl_accel_lock(ACCEL);
+  {
+    state->raw_buffer = nullptr;
+    state->imu_buffer = (samples_per_update > 0) ? buffer : nullptr;
+    state->config = (struct pbl_accel_config){.gyro = gyro, .range_mg = accel_range_mg};
     state->samples_per_update = samples_per_update;
     state->num_samples = 0;
     state->generation++;
@@ -752,6 +807,22 @@ static int16_t prv_scale_raw_axis(const uint8_t *sample, const AccelRawBatch *ba
   return (int16_t)(batch->axis[axis].sign * mg);
 }
 
+//! Acquisition time of sample i: the driver's per-sample time when it has one.
+static uint64_t prv_sample_time_us(const AccelRawBatch *batch, uint16_t i) {
+  return batch->timestamps_us ? batch->timestamps_us[i]
+                              : batch->first_timestamp_us + (uint64_t)i * batch->sampling_interval_us;
+}
+
+static int16_t prv_scale_gyro_axis(const uint8_t *sample, const AccelRawBatch *batch, uint8_t axis) {
+  if (batch->gyro_scale_den == 0) {
+    return 0;
+  }
+  const uint8_t *p = sample + batch->gyro_axis[axis].offset;
+  int16_t raw = (int16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8U));
+  int32_t v = (int32_t)raw * batch->gyro_scale_num / batch->gyro_scale_den;
+  return (int16_t)(batch->gyro_axis[axis].sign * v);
+}
+
 static void prv_samples_cb(const struct pbl_accel *accel, const AccelRawBatch *batch,
                            void *user_data) {
   if (!s_enabled || batch->num_samples == 0) {
@@ -764,8 +835,7 @@ static void prv_samples_cb(const struct pbl_accel *accel, const AccelRawBatch *b
     .x = prv_scale_raw_axis(last, batch, AXIS_X),
     .y = prv_scale_raw_axis(last, batch, AXIS_Y),
     .z = prv_scale_raw_axis(last, batch, AXIS_Z),
-    .timestamp_us = batch->first_timestamp_us +
-                    (uint64_t)(batch->num_samples - 1) * batch->sampling_interval_us,
+    .timestamp_us = prv_sample_time_us(batch, batch->num_samples - 1),
   };
   prv_update_last_accel_data(&last_sample);
 
@@ -776,7 +846,7 @@ static void prv_samples_cb(const struct pbl_accel *accel, const AccelRawBatch *b
   }
 
   if (prv_shared_buffer_empty()) {
-    s_last_empty_timestamp_ms = batch->first_timestamp_us / 1000;
+    s_last_empty_timestamp_us = prv_sample_time_us(batch, 0);
   }
 
   // Reserve a contiguous run for the whole batch, then fill it in place. Falling
@@ -802,13 +872,14 @@ static void prv_samples_cb(const struct pbl_accel *accel, const AccelRawBatch *b
       dst = (AccelManagerBufferData *)seg2;
     }
     const uint8_t *s = batch->data + i * batch->stride;
-    uint64_t ts_ms = (batch->first_timestamp_us + (uint64_t)i * batch->sampling_interval_us) / 1000;
     dst->rawdata.x = prv_scale_raw_axis(s, batch, AXIS_X);
     dst->rawdata.y = prv_scale_raw_axis(s, batch, AXIS_Y);
     dst->rawdata.z = prv_scale_raw_axis(s, batch, AXIS_Z);
-    // Note: the delta value overflows if the s_buffer is not drained for ~65s,
-    // but there should be more than enough time for it to drain in that window
-    dst->timestamp_delta_ms = (uint16_t)(ts_ms - s_last_empty_timestamp_ms);
+    dst->gyro[0] = prv_scale_gyro_axis(s, batch, AXIS_X);
+    dst->gyro[1] = prv_scale_gyro_axis(s, batch, AXIS_Y);
+    dst->gyro[2] = prv_scale_gyro_axis(s, batch, AXIS_Z);
+    // Note: the delta overflows if the s_buffer is not drained for ~71 minutes
+    dst->timestamp_delta_us = (uint32_t)(prv_sample_time_us(batch, i) - s_last_empty_timestamp_us);
     ++dst;
   }
 

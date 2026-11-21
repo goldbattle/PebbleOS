@@ -50,6 +50,8 @@ struct pbl_gpio_keys_key_state {
   const struct pbl_gpio_keys_key *key;
   struct pbl_timer timer;
   bool pressed;
+  /** pbl_realtime_us() at the first edge since the debounce timer was last idle. */
+  uint64_t edge_us;
 };
 /** @endcond */
 
