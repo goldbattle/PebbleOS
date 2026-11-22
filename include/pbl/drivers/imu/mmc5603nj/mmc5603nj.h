@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include <pbl/kernel/clocksync.h>
 #include <pbl/drivers/i2c.h>
 #include <pbl/drivers/mag.h>
 #include <pbl/kernel/work.h>
@@ -37,6 +38,12 @@ struct pbl_mmc5603nj_state {
   uint8_t rate_hz;
   /** Polling work. */
   struct pbl_delayed_work poll_timer;
+  /** Sample clock: sample count -> uptime, fitted over the poll windows (pbl/kernel/clocksync.h). */
+  struct pbl_clocksync sync;
+  /** Samples since sampling started, including ones a late poll missed: the clock fit's ticks. */
+  uint32_t count;
+  /** Uptime of the previous status read: a sample found ready was measured after it. */
+  uint64_t last_poll_us;
 };
 
 /** @brief MMC5603NJ magnetometer. */

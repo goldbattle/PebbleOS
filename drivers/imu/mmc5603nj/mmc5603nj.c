@@ -3,12 +3,14 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <errno.h>
+#include <inttypes.h>
 
 #include <pbl/devicetree.h>
 #include <pbl/drivers/i2c.h>
 #include <pbl/drivers/imu/mmc5603nj/mmc5603nj.h>
 #include <pbl/drivers/imu/mmc5603nj/registers.h>
 #include <pbl/drivers/mag.h>
+#include <pbl/kernel/clocksync.h>
 #include <pbl/kernel/delay.h>
 #include <pbl/kernel/time.h>
 #include <pbl/logging/logging.h>
@@ -21,11 +23,18 @@ PBL_LOG_MODULE_DECLARE(driver_mag, CONFIG_DRIVER_IMU_LOG_LEVEL);
 
 #define MMC5603NJ_RATE_HZ_MAX 255U
 
-// The sensor free-runs and has no data-ready timestamp, so it is polled at 4x its output rate. A
-// sample found ready was completed at some point since the previous poll, so it is stamped at the
-// middle of that window: the stamp is within +-poll_period/2 of the real measurement time (plus
-// the small, fixed I2C read latency). Polling period floor is the 1 ms timer resolution.
+// The sensor has no timestamp, FIFO or interrupt, so it is polled at 4x its output rate. In
+// continuous mode it measures on its own oscillator at a steady rate, so its samples are counted,
+// and the count is mapped onto uptime like the LSM6DSO's hardware counter: a continuous line fit
+// (pbl/kernel/clocksync.h) over the windows [previous poll, this poll] in which each sample turned
+// up. The stamps are evenly spaced at the sensor's real rate and, once the fit has a few seconds of
+// windows, within a small fraction of a poll period of the measurement time. A poll that comes late
+// (the sensor overwrote a sample) advances the count by the samples missed, so the clock stays
+// right. Polling period floor is the 1 ms timer resolution.
 #define MMC5603NJ_POLL_OVERSAMPLE 4U
+// Memory of the clock fit: long enough to average out the poll windows, short enough to follow
+// the oscillator's drift with temperature.
+#define MMC5603NJ_SYNC_MEMORY_S 10.0
 
 static uint32_t s_poll_period_us;
 
@@ -175,9 +184,50 @@ static int prv_set_rate_hw(uint8_t rate_hz) {
     return ret;
   }
 
-  return prv_write(MMC5603NJ_REG_CTRL2, PBL_FIELD_PREP(MMC5603NJ_CTRL2_AUTOSET_PRD_MASK,
-                                                       MMC5603NJ_CTRL2_AUTOSET_PRD_100) |
-                                            MMC5603NJ_CTRL2_PRD_SET_EN | MMC5603NJ_CTRL2_CMM_EN);
+  ret = prv_write(MMC5603NJ_REG_CTRL2, PBL_FIELD_PREP(MMC5603NJ_CTRL2_AUTOSET_PRD_MASK,
+                                                      MMC5603NJ_CTRL2_AUTOSET_PRD_100) |
+                                           MMC5603NJ_CTRL2_PRD_SET_EN | MMC5603NJ_CTRL2_CMM_EN);
+  if (ret != 0) {
+    return ret;
+  }
+
+  // Continuous mode starts now: a new sample clock at the nominal rate
+  pbl_clocksync_init(&s_dev->state->sync, 1000000.0 / (double)rate_hz, 32U,
+                     MMC5603NJ_SYNC_MEMORY_S);
+  s_dev->state->count = 0U;
+  s_dev->state->last_poll_us = pbl_uptime_us();
+  return 0;
+}
+
+//! Time of the sample just found ready, measured between the previous status read (before) and
+//! this one (after): its count, mapped through the clock fit (see the note at the top).
+static uint64_t prv_sample_time_us(uint64_t before, uint64_t after) {
+  struct pbl_mmc5603nj_state *st = s_dev->state;
+  const double period_us = pbl_clocksync_us_per_tick(&st->sync);
+  uint32_t tick = 0U;
+
+  // The data registers hold only the newest sample, so after a late poll the one read was measured
+  // within the last period, not anywhere since the previous poll
+  if ((double)(after - before) > period_us) {
+    before = after - (uint64_t)period_us;
+  }
+
+  if (st->count > 0U) {
+    // Samples since the previous one, by the fitted period: more than 1 when a late poll missed some
+    const uint32_t prev = st->count - 1U;
+    const uint64_t mid = before + (after - before) / 2U;
+    const double since_us = (double)(int64_t)(mid - pbl_clocksync_to_uptime_us(&st->sync, prev));
+    const int32_t n = (int32_t)(since_us / period_us + 0.5);
+    if (n > 1) {
+      PBL_LOG_DBG("Late poll: %" PRId32 " samples missed", n - 1);
+    }
+    tick = prev + (uint32_t)PBL_MAX(n, 1);
+  }
+
+  st->count = tick + 1U;
+  pbl_clocksync_add_pair(&st->sync, tick, before, after);
+  const int64_t us = (int64_t)pbl_clocksync_to_uptime_us(&st->sync, tick) + pbl_realtime_offset_us();
+  return (us > 0) ? (uint64_t)us : 0U;
 }
 
 static void prv_temperature_step(void) {
@@ -222,6 +272,7 @@ static pbl_tick_t prv_poll_period_ticks(uint8_t rate_hz) {
 static void prv_poll_fn(struct pbl_work *work) {
   struct pbl_mmc5603nj_state *state = s_dev->state;
   MagData sample;
+  uint64_t polled_us;
   bool ready;
   int ret;
 
@@ -234,7 +285,9 @@ static void prv_poll_fn(struct pbl_work *work) {
   prv_temperature_step();
 
   ret = prv_is_data_ready(&ready);
+  polled_us = pbl_uptime_us();  // the status read: a ready sample was measured before it
   if (ret == 0 && !ready) {
+    state->last_poll_us = polled_us;
     goto out;
   }
 
@@ -250,8 +303,8 @@ static void prv_poll_fn(struct pbl_work *work) {
     goto out;
   }
 
-  // prv_read_sample() stamped the read time; the measurement finished within the last poll period
-  sample.timestamp_us -= s_poll_period_us / 2U;
+  sample.timestamp_us = prv_sample_time_us(state->last_poll_us, polled_us);
+  state->last_poll_us = polled_us;
   pbl_mag_report_sample(&s_dev->mag, &sample);
 
 out:

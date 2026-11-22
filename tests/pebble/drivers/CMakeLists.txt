@@ -75,3 +75,16 @@ pbl_clar_test(test_flash_partition
     tests/fakes/fake_spi_flash.c
     tests/pebble/drivers/flash_partitions_single_slot.c
 )
+
+pbl_clar_test(test_mmc5603nj
+  SOURCES
+    kernel/clocksync.c
+    drivers/base/device.c
+    drivers/imu/mag.c
+    drivers/imu/mmc5603nj/mmc5603nj.c
+  DEFINES
+    CONFIG_DEVICE_LOG_LEVEL=0
+    CONFIG_DRIVER_IMU_LOG_LEVEL=0
+    PBL_NO_LINKER_SCRIPT
+  OVERRIDES dummy_board
+)

@@ -18,6 +18,7 @@ watch), what changed, and how it is tested.
 | 8 | `services/data_logging: check for data to send every minute` | was every 5 minutes | `test_data_logging__active_session_is_sent_within_a_minute` |
 | 9 | `sdk: export ... (revision 117)` | the app APIs of 1, 3, 4, 5 in the SDK | (SDK generation) |
 | 10 | `services/weather: the current temperature for apps (revision 118)` | `weather_service_peek_current_temp()` | `tests/pebble/services/test_weather_service.c` |
+| 11 | `drivers/imu/mmc5603nj: sample times from a clock fit over the poll windows` | even, accurate magnetometer stamps (was +-1.25 ms jitter) | `tests/pebble/drivers/test_mmc5603nj.c` |
 
 Changes 6, 7 and 8 are plain bug fixes that stand on their own upstream. 1 to 5 add API and are
 specific to sensor recording, but none of them changes existing behaviour for other apps.
@@ -203,6 +204,25 @@ revision 118 (0x5.0x75).
 
 Tests: `test_weather_service` checks the temperature is unknown before any forecast arrives, is the
 forecast's after a weather database insert, and unknown again after a flush.
+
+## 11. Magnetometer sample times from a clock fit
+
+The MMC5603NJ has no timestamp, no FIFO and no interrupt line on this board, so the driver polls its
+status register at 4x the output rate. It used to stamp each sample at the middle of the poll window
+it turned up in: up to +-1.25 ms off at 100 Hz, and every interval a different multiple of the poll
+period. Those jittering intervals also cost about 16 bits per sample in a delta-coded stream.
+
+In continuous mode the sensor measures on its own oscillator at a steady rate. The driver now counts
+its samples and maps the count onto uptime with the same line fit (`kernel/clocksync.c`) that maps the
+LSM6DSO's hardware counter: each sample adds the pair (count, [previous poll, this poll]). The stamps
+are evenly spaced at the sensor's real rate (which the fit measures; nominal is only the start) and
+within a fraction of a poll period of the measurement. The data registers hold only the newest
+sample, so a late poll clamps the window to the last period and advances the count by the samples it
+missed; the clock stays right. Each sampling start begins a new fit.
+
+Tests: `tests/pebble/drivers/test_mmc5603nj.c`, a fake sensor 0.2 % slow, polled with jitter: stamps
+within 150 us of the measurement times after a few seconds, intervals within 60 us of the real period,
+a 25 ms late poll counting the 2 missed samples with its stamp still right, and a restart.
 
 ## Open issue found on the way (not fixed here)
 
