@@ -644,3 +644,23 @@ void test_data_logging__full_store_drops_whole_items(void) {
   cl_assert_equal_i(first + num_bytes / ITEM_SIZE, num_items);
   free(buf);
 }
+
+// ----------------------------------------------------------------------------------------
+// Every message to the phone waits for its ack with a 30 s timeout. The timeout takes the session
+// list lock, which storage work holds for seconds while it compacts a full store, so it must run on
+// the storage queue (pbl_sys_workq): on pbl_sys_workq_high it blocked behind that work until the task
+// watchdog rebooted the watch (a phone that stopped acking while the store was full).
+void test_data_logging__ack_timeout_runs_on_the_storage_queue(void) {
+  DataLoggingSessionRef logging_session =
+      data_logging_create(0x1234, DATA_LOGGING_BYTE_ARRAY, 4, false);
+  cl_assert(logging_session);
+  fake_sys_work_callbacks_invoke_pending();
+
+  // The session open goes out and waits for the phone's ack
+  fake_comm_session_process_send_next();
+
+  struct pbl_delayed_work *timeout = fake_work_get_next();
+  cl_assert(timeout != nullptr);
+  cl_assert(timeout->work.q == &pbl_sys_workq);
+  cl_assert(fake_work_timeout_ms(timeout) <= 30000U);
+}
