@@ -640,7 +640,8 @@ void modal_manager_handle_button_event(PebbleEvent *event) {
       if (id == BUTTON_ID_BACK && !window->overrides_back_button) {
         window_stack_remove(window, true /* animated */);
       } else {
-        click_recognizer_handle_button_down(&click_manager->recognizers[id]);
+        click_recognizer_handle_button_down_at(&click_manager->recognizers[id],
+                                               event->button.timestamp_us_lo);
       }
       break;
     }

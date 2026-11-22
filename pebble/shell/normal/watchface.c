@@ -274,7 +274,8 @@ void watchface_handle_button_event(PebbleEvent *e) {
   switch (e->type) {
     case PEBBLE_BUTTON_DOWN_EVENT:
       s_buttons_pressed |= (BIT_SET << e->button.button_id);
-      click_recognizer_handle_button_down(&s_click_manager.recognizers[e->button.button_id]);
+      click_recognizer_handle_button_down_at(&s_click_manager.recognizers[e->button.button_id],
+                                             e->button.timestamp_us_lo);
       prv_check_combo_back_hold();
       break;
     case PEBBLE_BUTTON_UP_EVENT:
