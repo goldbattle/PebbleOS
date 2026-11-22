@@ -11,6 +11,7 @@
 #include <pbl/util/size.h>
 
 #include <process_state/app_state/app_state.h>
+#include <syscall/syscall.h>
 
 //! The time that the user has to hold the button before repetition kicks in.
 static const uint32_t CLICK_REPETITION_DELAY_MS = 400;
@@ -224,7 +225,21 @@ static void prv_multi_click_timeout_callback(void *data) {
   }
 }
 
+uint64_t click_recognizer_get_press_time_us(ClickRecognizerRef recognizer_ref) {
+  ClickRecognizer *recognizer = (ClickRecognizer *)recognizer_ref;
+  return recognizer->press_time_us;
+}
+
 void click_recognizer_handle_button_down(ClickRecognizer *recognizer) {
+  click_recognizer_handle_button_down_at(recognizer, (uint32_t)sys_get_time_us());
+}
+
+void click_recognizer_handle_button_down_at(ClickRecognizer *recognizer, uint32_t timestamp_us_lo) {
+  // The edge is at most seconds old: take the time with these low bits closest to, and not after,
+  // now
+  const uint64_t now = sys_get_time_us();
+  recognizer->press_time_us = now - (uint32_t)((uint32_t)now - timestamp_us_lo);
+
   recognizer->is_button_down = true;
 
   prv_cancel_timer(&recognizer->multi_click_timer);

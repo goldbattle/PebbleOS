@@ -119,8 +119,8 @@ static void prv_app_button_down_handler(PebbleEvent *e, void *context) {
     return;
   }
 
-  click_recognizer_handle_button_down(
-      &app_state_get_click_manager()->recognizers[e->button.button_id]);
+  click_recognizer_handle_button_down_at(
+      &app_state_get_click_manager()->recognizers[e->button.button_id], e->button.timestamp_us_lo);
 }
 
 static void prv_app_button_up_handler(PebbleEvent *e, void *context) {

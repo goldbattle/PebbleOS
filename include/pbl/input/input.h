@@ -82,6 +82,9 @@ struct pbl_input_event {
   uint16_t code;
   /** Value, depending on @ref type. */
   int32_t value;
+  /** When it physically happened, pbl_realtime_us(). The report time unless the driver knows
+   *  better (e.g. a debounced key reports the time of its first edge). */
+  uint64_t timestamp_us;
 };
 
 /** @brief Listener of input events. */
@@ -114,6 +117,15 @@ struct pbl_input_callback {
  * @param sync Whether the event ends a report.
  */
 void pbl_input_report(enum pbl_input_type type, uint16_t code, int32_t value, bool sync);
+
+/** @brief Same as pbl_input_report() for an event that happened at @p timestamp_us. */
+void pbl_input_report_at(enum pbl_input_type type, uint16_t code, int32_t value, bool sync,
+                         uint64_t timestamp_us);
+
+static inline void pbl_input_report_key_at(uint16_t code, bool pressed, bool sync,
+                                           uint64_t timestamp_us) {
+  pbl_input_report_at(PBL_INPUT_EV_KEY, code, pressed ? 1 : 0, sync, timestamp_us);
+}
 
 /**
  * @brief Report a key event.

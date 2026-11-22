@@ -566,3 +566,8 @@ pbl_clar_test(test_option_menu_window
   OVERRIDES dummy_board
   TEST_IMAGES
 )
+
+pbl_clar_test(test_click_press_time
+  SOURCES
+    pebble/applib/ui/click.c
+)

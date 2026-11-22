@@ -19,6 +19,11 @@ PBL_WEAK void click_recognizer_handle_button_down(ClickRecognizer *recognizer) {
   return;
 }
 
+PBL_WEAK void click_recognizer_handle_button_down_at(ClickRecognizer *recognizer,
+                                                     uint32_t timestamp_us_lo) {
+  return;
+}
+
 PBL_WEAK uint8_t click_number_of_clicks_counted(ClickRecognizerRef recognizer) {
   return 0;
 }

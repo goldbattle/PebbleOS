@@ -77,6 +77,7 @@ static void prv_input_cb(const struct pbl_input_event *evt, void *user_data) {
     PebbleEvent e = {
       .type = evt->value ? PEBBLE_BUTTON_DOWN_EVENT : PEBBLE_BUTTON_UP_EVENT,
       .button.button_id = prv_rotate(key),
+      .button.timestamp_us_lo = (uint32_t)evt->timestamp_us,
     };
 
     if (pbl_in_isr()) {
