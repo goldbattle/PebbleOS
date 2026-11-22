@@ -10,6 +10,7 @@
 #include "compass_service_private.h"
 
 #include <pbl/kernel/fatal.h>
+#include <pbl/util/math.h>
 #include <pbl/util/trig.h>
 
 #include <applib/app_timer.h>
@@ -66,6 +67,82 @@ static void prv_do_data_handle(PebbleEvent *e, void *context) {
       config->last_angle = data.magnetic_heading;
     }
   }
+}
+
+// The worker has no RAM to spare for this, so only apps can use the magnetometer data service
+static MagServiceConfig **prv_get_mag_config(void) {
+  static MagServiceConfig *s_none;
+  if (pebble_task_get_current() == PebbleTask_App) {
+    return app_state_get_mag_config();
+  }
+  s_none = nullptr;
+  return &s_none;
+}
+
+static void prv_do_mag_handle(PebbleEvent *e, void *context) {
+  MagServiceConfig *config = *prv_get_mag_config();
+  if (config == nullptr) {
+    return;
+  }
+
+  // A batch handler may unsubscribe, which frees config: only look at it again after re-reading
+  const uint32_t per_update = config->samples_per_update;
+  uint32_t num;
+  do {
+    num = sys_ecompass_mag_get_samples(per_update, config->samples);
+    if (num > 0) {
+      config->handler(config->samples, num);
+    }
+    config = *prv_get_mag_config();
+  } while (num == per_update && config != nullptr);
+}
+
+uint32_t mag_data_service_subscribe(uint32_t samples_per_update, uint32_t rate_hz,
+                                    MagDataHandler handler) {
+  mag_data_service_unsubscribe();
+
+  if (handler == nullptr) {
+    return 0;
+  }
+  if (pebble_task_get_current() != PebbleTask_App) {
+    return 0;
+  }
+  samples_per_update = PBL_CLAMP(samples_per_update, 1U, MAG_SAMPLES_PER_UPDATE_MAX);
+
+  const uint32_t rate = sys_ecompass_mag_request(rate_hz, samples_per_update);
+  if (rate == 0) {
+    return 0;
+  }
+
+  MagServiceConfig *config = applib_zalloc(sizeof(MagServiceConfig));
+  if (config != nullptr) {
+    config->samples = applib_zalloc(samples_per_update * sizeof(MagSample));
+    if (config->samples == nullptr) {
+      applib_free(config);
+      config = nullptr;
+    }
+  }
+  if (config == nullptr) {
+    return 0;
+  }
+
+  config->handler = handler;
+  config->samples_per_update = samples_per_update;
+  config->info = (EventServiceInfo){.type = PEBBLE_MAG_SAMPLE_EVENT, .handler = &prv_do_mag_handle};
+  *prv_get_mag_config() = config;
+  event_service_client_subscribe(&config->info);
+  return rate;
+}
+
+void mag_data_service_unsubscribe(void) {
+  MagServiceConfig **config = prv_get_mag_config();
+  if (*config == nullptr) {
+    return;
+  }
+  event_service_client_unsubscribe(&(*config)->info);
+  applib_free((*config)->samples);
+  applib_free(*config);
+  *config = nullptr;
 }
 
 // Callback for disabling compass service on timeout

@@ -3,6 +3,7 @@
 
 #include <pbl/drivers/mag.h>
 #include <pbl/kernel/assert.h>
+#include <pbl/kernel/malloc.h>
 #include <pbl/kernel/syscall.h>
 #include <pbl/kernel/work.h>
 #include <pbl/logging/logging.h>
@@ -12,6 +13,7 @@
 
 #include <applib/accel_service.h>
 #include <applib/compass_service.h>
+#include <applib/compass_service_private.h>
 #include <syscall/syscall.h>
 
 PBL_LOG_MODULE_DEFINE(service_ecompass, CONFIG_SERVICE_ECOMPASS_LOG_LEVEL);
@@ -41,6 +43,27 @@ static int16_t s_saved_corr[3] = {};
 static int32_t s_last_heading = -1; // the last heading we found
 
 static MagData s_mag_sample;
+
+//////////////////////////////////////////////////////////////////////////////////
+// Raw magnetometer subscribers (mag_data_service_subscribe)
+
+typedef struct {
+  // What the task asked for (sys_ecompass_mag_request)
+  uint32_t rate_hz;
+  uint32_t per_update;
+  // Active from the task's event service subscription until its unsubscription or exit. All of
+  // the following is guarded by the magnetometer device lock.
+  MagSample *ring;  // null when not active; capacity 2 * per_update
+  uint16_t cap;
+  uint16_t head;
+  uint16_t count;
+  uint32_t dropped;
+  bool notified;  // a PEBBLE_MAG_SAMPLE_EVENT is on its way and the batch has not been fetched
+} MagSubscriber;
+
+static MagSubscriber s_mag_subs[NumPebbleTask];
+// Watch time of the last sample that was passed on to the compass heading code
+static uint64_t s_last_compass_sample_us;
 
 //////////////////////////////////////////////////////////////////////////////////
 // Calibration state variables
@@ -130,16 +153,39 @@ static int32_t prv_correct_for_roll_and_pitch(AccelRawData *accel_data, MagData 
 //////////////////////////////////////////////////////////////////////////////////
 // Private handlers for compass service
 
+// The magnetometer runs at the fastest rate any user wants, or not at all
+static void prv_update_mag_rate(void) {
+  uint32_t interval_us = 0;
+  if (s_compass_subscribers_count > 0) {
+    interval_us = s_high_freq_calib_active ? ECOMPASS_CALIB_SAMPLING_INTERVAL_US
+                                           : ECOMPASS_SAMPLING_INTERVAL_US;
+  }
+
+  pbl_mag_lock(MAG);
+  for (int i = 0; i < NumPebbleTask; i++) {
+    if (s_mag_subs[i].ring != nullptr) {
+      // Rounded up so that the driver, which rounds the rate up, lands on rate_hz
+      const uint32_t mag_us = (1000000U + s_mag_subs[i].rate_hz - 1U) / s_mag_subs[i].rate_hz;
+      if (interval_us == 0 || mag_us < interval_us) {
+        interval_us = mag_us;
+      }
+    }
+  }
+  const int ret = pbl_mag_set_sampling_interval(MAG, interval_us, nullptr);
+  pbl_mag_unlock(MAG);
+
+  if (ret != 0) {
+    PBL_LOG_WRN("Could not set magnetometer interval %" PRIu32, interval_us);
+  }
+}
+
 static void prv_calibration_time_expired_cb(struct pbl_work *work) {
   PBL_LOG_DBG(
       "Calibration time expired, complete, or app exit, "
       "dropping back to low frequency");
 
-  if (pbl_mag_set_sampling_interval(MAG, ECOMPASS_SAMPLING_INTERVAL_US, nullptr) != 0) {
-    PBL_LOG_WRN("Could not drop back to low frequency");
-  }
-
   s_high_freq_calib_active = false;
+  prv_update_mag_rate();
   pbl_wallclock_work_stop(&s_cb_info);
 }
 
@@ -188,8 +234,8 @@ static void prv_compass_data_service_stop(PebbleTask task) {
       accel_session_data_unsubscribe(s_accel_session);
       accel_session_delete(s_accel_session);
       s_accel_session = nullptr;
-      (void)pbl_mag_set_sampling_interval(MAG, 0U, nullptr);
     }
+    prv_update_mag_rate();
   }
   PBL_LOG_DBG("subscribers %" PRIu8, s_compass_subscribers_count);
 }
@@ -204,9 +250,8 @@ static void prv_compass_data_service_start(PebbleTask task) {
     s_accel_session = accel_session_create();
     accel_session_raw_data_subscribe(s_accel_session, ACCEL_SAMPLING_25HZ, 5,
                                      prv_accel_for_compass_handler);
-
-    (void)pbl_mag_set_sampling_interval(MAG, ECOMPASS_SAMPLING_INTERVAL_US, nullptr);
   }
+  prv_update_mag_rate();
   PBL_LOG_DBG("subscribers %" PRIu8, s_compass_subscribers_count);
 }
 
@@ -217,11 +262,92 @@ static void prv_post_event_work(void *data) {
   event_put(&e);
 }
 
+static void prv_post_mag_notification_work(void *data) {
+  PebbleEvent e = {.type = PEBBLE_MAG_SAMPLE_EVENT};
+  event_put(&e);
+}
+
+static void prv_mag_data_service_stop(PebbleTask task) {
+  MagSubscriber *sub = &s_mag_subs[task];
+
+  pbl_mag_lock(MAG);
+  pbl_free(sub->ring);
+  sub->ring = nullptr;
+  pbl_mag_unlock(MAG);
+
+  prv_update_mag_rate();
+}
+
+static void prv_mag_data_service_start(PebbleTask task) {
+  MagSubscriber *sub = &s_mag_subs[task];
+
+  prv_mag_data_service_stop(task);
+  if (sub->rate_hz == 0 || sub->per_update == 0) {
+    return;
+  }
+
+  MagSample *ring = pbl_zalloc(2U * sub->per_update * sizeof(MagSample));
+  if (ring == nullptr) {
+    PBL_LOG_ERR("No memory for magnetometer samples");
+    return;
+  }
+
+  pbl_mag_lock(MAG);
+  sub->cap = 2U * sub->per_update;
+  sub->head = 0;
+  sub->count = 0;
+  sub->dropped = 0;
+  sub->notified = false;
+  sub->ring = ring;
+  pbl_mag_unlock(MAG);
+
+  prv_update_mag_rate();
+}
+
 static void prv_mag_sample_cb(const struct pbl_mag *mag, const MagData *sample, void *user_data) {
   s_mag_sample = *sample;
 
+  bool notify = false;
+  const MagSample ms = {
+    .x = sample->x,
+    .y = sample->y,
+    .z = sample->z,
+    .temp_c100 = sample->temp_c100,
+    .calibrated = (s_current_cal_status == CompassStatusCalibrated),
+    .timestamp_us = sample->timestamp_us,
+  };
+  for (int i = 0; i < NumPebbleTask; i++) {
+    MagSubscriber *sub = &s_mag_subs[i];
+    if (sub->ring == nullptr) {
+      continue;
+    }
+    if (sub->count == sub->cap) {
+      sub->dropped++;  // the task is behind: drop rather than block
+      continue;
+    }
+    sub->ring[(sub->head + sub->count) % sub->cap] = ms;
+    sub->count++;
+    if (sub->count >= sub->per_update && !sub->notified) {
+      sub->notified = true;
+      notify = true;
+    }
+  }
+  if (notify) {
+    pbl_sys_work_call_high(prv_post_mag_notification_work, nullptr);
+  }
+
+  // The magnetometer may run faster than the compass needs because of raw subscribers: feed the
+  // heading code at the compass rate only (half a sensor period of slack for jitter).
   // event_put() may block on KernelMain, which takes the device lock: post outside of it
-  pbl_sys_work_call_high(prv_post_event_work, nullptr);
+  if (s_compass_subscribers_count > 0) {
+    const uint32_t compass_us = s_high_freq_calib_active ? ECOMPASS_CALIB_SAMPLING_INTERVAL_US
+                                                         : ECOMPASS_SAMPLING_INTERVAL_US;
+    const uint32_t slack_us = pbl_mag_get_sampling_interval(MAG) / 2U;
+    if (sample->timestamp_us - s_last_compass_sample_us + slack_us >= compass_us) {
+      s_last_compass_sample_us = sample->timestamp_us;
+      pbl_sys_work_call_high(prv_post_event_work, nullptr);
+    }
+  }
 }
 
 static const struct pbl_mag_listener s_mag_listener = {
@@ -253,6 +379,8 @@ void ecompass_service_init(void) {
 
   event_service_init(PEBBLE_COMPASS_DATA_EVENT, &prv_compass_data_service_start,
                      &prv_compass_data_service_stop);
+  event_service_init(PEBBLE_MAG_SAMPLE_EVENT, &prv_mag_data_service_start,
+                     &prv_mag_data_service_stop);
 }
 
 void ecompass_service_handle(void) {
@@ -284,11 +412,11 @@ void ecompass_service_handle(void) {
     // for a short duration in order to finish calibration more quickly
     if (!s_calib_run) {
       ecomp_corr_reset();
-      (void)pbl_mag_set_sampling_interval(MAG, ECOMPASS_CALIB_SAMPLING_INTERVAL_US, nullptr);
+      s_high_freq_calib_active = true;
+      prv_update_mag_rate();
       pbl_wallclock_work_start(&pbl_sys_workq_high, &s_cb_info, 60,
                                ECOMPASS_CALIBRATION_FAST_MINUTES);
       s_calib_run = true;
-      s_high_freq_calib_active = true;
       samples_collected = 0;
       return; // if we are switching to high freq mode, don't use 1st sample
     }
@@ -359,6 +487,49 @@ void ecompass_service_handle(void) {
 
 //////////////////////////////////////////////////////////////////////////////////
 // System call handlers
+
+PBL_SYSCALL(uint32_t, sys_ecompass_mag_request, (VAL, uint32_t, rate_hz),
+            (VAL, uint32_t, samples_per_update)) {
+  MagSubscriber *sub = &s_mag_subs[pebble_task_get_current()];
+
+  if (rate_hz == 0 || samples_per_update == 0 || !pbl_device_is_ready(&MAG->dev)) {
+    sub->rate_hz = 0;
+    return 0;
+  }
+
+  sub->rate_hz = PBL_CLAMP(rate_hz, 1U, MAG_RATE_HZ_MAX);
+  sub->per_update = PBL_CLAMP(samples_per_update, 1U, MAG_SAMPLES_PER_UPDATE_MAX);
+  return sub->rate_hz;
+}
+
+PBL_SYSCALL(uint32_t, sys_ecompass_mag_get_samples, (VAL, uint32_t, max),
+            (OUT_BUF, MagSample *, samples, max * sizeof(MagSample))) {
+  MagSubscriber *sub = &s_mag_subs[pebble_task_get_current()];
+
+  if (max > MAG_SAMPLES_PER_UPDATE_MAX) {
+    pbl_syscall_fail();
+  }
+
+  pbl_mag_lock(MAG);
+  uint32_t n = 0;
+  if (sub->ring != nullptr) {
+    n = PBL_MIN(max, (uint32_t)sub->count);
+    for (uint32_t i = 0; i < n; i++) {
+      samples[i] = sub->ring[(sub->head + i) % sub->cap];
+    }
+    sub->head = (sub->head + n) % sub->cap;
+    sub->count -= n;
+    if (sub->count < sub->per_update) {
+      sub->notified = false;
+    }
+    if (sub->dropped != 0) {
+      PBL_LOG_WRN("Magnetometer subscriber too slow, dropped %" PRIu32 " samples", sub->dropped);
+      sub->dropped = 0;
+    }
+  }
+  pbl_mag_unlock(MAG);
+  return n;
+}
 
 PBL_SYSCALL(bool, sys_ecompass_service_subscribed) {
   PebbleTask task = pebble_task_get_current();

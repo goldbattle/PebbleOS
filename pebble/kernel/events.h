@@ -130,6 +130,10 @@ typedef enum {
   //! Emitted when the effective dark mode flips, whether the cause is the mode pref or the
   //! schedule. Only emitted on changes of \ref system_theme_is_dark_mode.
   PEBBLE_DARK_MODE_CHANGE_EVENT,
+  //! A full batch of magnetometer samples is waiting for each subscriber of
+  //! mag_data_service_subscribe(). No payload: the samples are fetched with
+  //! sys_ecompass_mag_get_samples().
+  PEBBLE_MAG_SAMPLE_EVENT,
 
   PEBBLE_NUM_EVENTS
 } PebbleEventType;

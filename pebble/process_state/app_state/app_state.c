@@ -68,6 +68,7 @@ typedef struct {
   AccelServiceState accel_state;
 
   CompassServiceConfig *compass_config;
+  MagServiceConfig *mag_config;
 
   PluginServiceState plugin_service_state;
 
@@ -423,6 +424,10 @@ AccelServiceState *app_state_get_accel_state(void) {
 
 CompassServiceConfig **app_state_get_compass_config(void) {
   return &s_app_state_ptr->compass_config;
+}
+
+MagServiceConfig **app_state_get_mag_config(void) {
+  return &s_app_state_ptr->mag_config;
 }
 
 PluginServiceState *app_state_get_plugin_service(void) {

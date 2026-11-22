@@ -104,6 +104,7 @@ EventServiceInfo *app_state_get_event_service_state(void);
 AccelServiceState *app_state_get_accel_state(void);
 
 CompassServiceConfig **app_state_get_compass_config(void);
+MagServiceConfig **app_state_get_mag_config(void);
 
 PluginServiceState *app_state_get_plugin_service(void);
 

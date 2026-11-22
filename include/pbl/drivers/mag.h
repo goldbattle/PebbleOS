@@ -35,7 +35,7 @@
  * @{
  */
 
-/** @brief Magnetometer sample, in milligauss, in the watch frame. */
+/** @brief Magnetometer sample, in milligauss (0.1 uT), in the watch frame. */
 typedef struct PBL_PACKED {
   /** Magnetic field along the X axis. */
   int16_t x;
@@ -43,6 +43,10 @@ typedef struct PBL_PACKED {
   int16_t y;
   /** Magnetic field along the Z axis. */
   int16_t z;
+  /** Sensor temperature in 0.01 degrees C, INT16_MIN if unavailable. Set by the driver. */
+  int16_t temp_c100;
+  /** Measurement time on the watch clock, pbl_realtime_us(). Set by the driver. */
+  uint64_t timestamp_us;
 } MagData;
 
 struct pbl_mag;

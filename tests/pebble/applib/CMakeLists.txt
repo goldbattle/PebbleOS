@@ -199,3 +199,10 @@ pbl_clar_test(test_qr_code
   PLATFORMS emery
   TEST_IMAGES
 )
+
+pbl_clar_test(test_mag_data_service
+  SOURCES
+    pebble/applib/compass_service.c
+  DEFINES CONFIG_MAG
+  OVERRIDES dummy_board
+)

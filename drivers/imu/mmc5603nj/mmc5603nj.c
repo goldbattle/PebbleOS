@@ -10,6 +10,7 @@
 #include <pbl/drivers/imu/mmc5603nj/registers.h>
 #include <pbl/drivers/mag.h>
 #include <pbl/kernel/delay.h>
+#include <pbl/kernel/time.h>
 #include <pbl/logging/logging.h>
 #include <pbl/services/imu/units.h>
 #include <pbl/util/byteorder.h>
@@ -19,6 +20,24 @@
 PBL_LOG_MODULE_DECLARE(driver_mag, CONFIG_DRIVER_IMU_LOG_LEVEL);
 
 #define MMC5603NJ_RATE_HZ_MAX 255U
+
+// The sensor free-runs and has no data-ready timestamp, so it is polled at 4x its output rate. A
+// sample found ready was completed at some point since the previous poll, so it is stamped at the
+// middle of that window: the stamp is within +-poll_period/2 of the real measurement time (plus
+// the small, fixed I2C read latency). Polling period floor is the 1 ms timer resolution.
+#define MMC5603NJ_POLL_OVERSAMPLE 4U
+
+static uint32_t s_poll_period_us;
+
+// Temperature (TOUT, 8 bit: -75 C + 0.8 C/LSB, per datasheet) is measured about once a second by
+// setting TAKE_MEAS_T while continuous mode keeps running, then collected on a later poll when
+// STATUS1 reports it done. NOTE: not verified on hardware whether the part accepts TM_T in
+// continuous mode; if it never reports done the temperature simply stays unavailable (INT16_MIN).
+#define MMC5603NJ_TEMP_C100_UNAVAILABLE INT16_MIN
+
+static int16_t s_temp_c100 = MMC5603NJ_TEMP_C100_UNAVAILABLE;
+static bool s_temp_pending;
+static uint32_t s_temp_polls;  // polls since the last request (or since a request was dropped)
 
 static const struct pbl_mmc5603nj *s_dev;
 
@@ -87,6 +106,8 @@ static int prv_read_sample(MagData *sample) {
   sample->x = prv_get_axis(raw, AXIS_X);
   sample->y = prv_get_axis(raw, AXIS_Y);
   sample->z = prv_get_axis(raw, AXIS_Z);
+  sample->temp_c100 = s_temp_c100;
+  sample->timestamp_us = pbl_realtime_us();
 
   return 0;
 }
@@ -125,6 +146,9 @@ static int prv_set_rate_hw(uint8_t rate_hz) {
   bool ready;
   int ret;
 
+  s_temp_pending = false;
+  s_temp_polls = 0U;
+
   // Leave continuous mode
   ret = prv_write(MMC5603NJ_REG_CTRL2, 0x00);
   if (ret != 0) {
@@ -156,8 +180,43 @@ static int prv_set_rate_hw(uint8_t rate_hz) {
                                             MMC5603NJ_CTRL2_PRD_SET_EN | MMC5603NJ_CTRL2_CMM_EN);
 }
 
+static void prv_temperature_step(void) {
+  const uint32_t polls_per_second = 1000000U / s_poll_period_us;
+  uint8_t status;
+  uint8_t raw;
+
+  s_temp_polls++;
+
+  if (s_temp_pending) {
+    if (prv_read(MMC5603NJ_REG_STATUS1, &status, 1) == 0 &&
+        (status & MMC5603NJ_STATUS1_MEAS_T_DONE_MASK) != 0U) {
+      if (prv_read(MMC5603NJ_REG_TOUT, &raw, 1) == 0) {
+        s_temp_c100 = (int16_t)((int32_t)raw * 80 - 7500);
+      }
+      (void)prv_write(MMC5603NJ_REG_STATUS1, MMC5603NJ_STATUS1_MEAS_T_DONE_MASK);
+      s_temp_pending = false;
+    } else if (s_temp_polls >= 2U * polls_per_second) {
+      s_temp_pending = false;  // gave up on this one, try again
+    }
+    return;
+  }
+
+  if (s_temp_polls >= polls_per_second) {
+    // Same value as set up by prv_set_rate_hw(), plus the self-clearing temperature trigger
+    if (prv_write(MMC5603NJ_REG_CTRL0, MMC5603NJ_CTRL0_AUTO_SR_EN | MMC5603NJ_CTRL0_CMM_FREQ_EN |
+                                           MMC5603NJ_CTRL0_TAKE_MEAS_T) == 0) {
+      s_temp_pending = true;
+    }
+    s_temp_polls = 0U;
+  }
+}
+
+static uint32_t prv_poll_period_ms(uint8_t rate_hz) {
+  return PBL_MAX(1U, 1000U / rate_hz / MMC5603NJ_POLL_OVERSAMPLE);
+}
+
 static pbl_tick_t prv_poll_period_ticks(uint8_t rate_hz) {
-  return pbl_ms_to_ticks(PBL_DIV_ROUND_UP(1000U, rate_hz));
+  return pbl_ms_to_ticks(prv_poll_period_ms(rate_hz));
 }
 
 static void prv_poll_fn(struct pbl_work *work) {
@@ -171,6 +230,8 @@ static void prv_poll_fn(struct pbl_work *work) {
   if (state->rate_hz == 0U) {
     goto out;
   }
+
+  prv_temperature_step();
 
   ret = prv_is_data_ready(&ready);
   if (ret == 0 && !ready) {
@@ -189,6 +250,8 @@ static void prv_poll_fn(struct pbl_work *work) {
     goto out;
   }
 
+  // prv_read_sample() stamped the read time; the measurement finished within the last poll period
+  sample.timestamp_us -= s_poll_period_us / 2U;
   pbl_mag_report_sample(&s_dev->mag, &sample);
 
 out:
@@ -256,6 +319,7 @@ static int prv_set_sampling_interval(const struct pbl_mag *mag, uint32_t interva
     if (rate_hz == 0U) {
       pbl_delayed_work_cancel(&state->poll_timer);
     } else {
+      s_poll_period_us = prv_poll_period_ms(rate_hz) * 1000U;
       pbl_delayed_work_reschedule(&pbl_sys_workq_high, &state->poll_timer,
                                   PBL_TICKS(prv_poll_period_ticks(rate_hz)));
     }
