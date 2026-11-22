@@ -309,6 +309,9 @@ bool sys_do_not_disturb_is_active(void);
 //! @return true if dark mode is on. Unlike system_theme_is_dark_mode(), this also answers for
 //! third-party apps.
 bool sys_dark_mode_is_active(void);
+
+//! The weather service's current temperature, or WEATHER_SERVICE_LOCATION_FORECAST_UNKNOWN_TEMP
+int sys_weather_get_current_temp(void);
 //! @} // end addtogroup Preferences
 
 //! Get the time of the next enabled alarm.

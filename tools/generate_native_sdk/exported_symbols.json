@@ -2,7 +2,7 @@
   "_notes": [ "You need to increase the revision for each change of this file AND",
               "increase PROCESS_INFO_CURRENT_SDK_VERSION_MINOR in pebble_process_info.h"
             ],
-  "revision" : "117",
+  "revision" : "118",
   "version" : "2.0",
   "files": [
     "pebble/applib/status.h",
@@ -28,6 +28,7 @@
     "pebble/applib/backlight_service.h",
     "pebble/applib/battery_state_service.h",
     "pebble/applib/dark_mode_service.h",
+    "pebble/applib/weather_service.h",
     "pebble/applib/alarm_service.h",
     "pebble/applib/compass_service.h",
     "pebble/applib/connection_service.h",
@@ -495,6 +496,19 @@
                   "type": "function",
                   "name": "dark_mode_service_peek",
                   "addedRevision": "113",
+                  "stubReturn": "false"
+                }
+              ]
+            }, {
+              "type": "group",
+              "name": "WeatherService",
+              "appOnly": true,
+              "addedRevision": "118",
+              "exports": [
+                {
+                  "type": "function",
+                  "name": "weather_service_peek_current_temp",
+                  "addedRevision": "118",
                   "stubReturn": "false"
                 }
               ]

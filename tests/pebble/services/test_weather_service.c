@@ -14,6 +14,7 @@
 #include <applib/event_service_client.h>
 #include <clar.h>
 #include <kernel/events.h>
+#include <syscall/syscall.h>
 
 // Fixture
 ////////////////////////////////////////////////////////////////
@@ -131,6 +132,7 @@ void test_weather_service__get_default_location_forecast_from_weather_db_update(
   WeatherLocationForecast *forecast = weather_service_create_default_forecast();
   // no blob db events were fired during unit test, therefore forecast cache never updated
   cl_assert(!forecast);
+  cl_assert_equal_i(sys_weather_get_current_temp(), WEATHER_SERVICE_LOCATION_FORECAST_UNKNOWN_TEMP);
 
   const int default_location_index = 0;
   const WeatherDBKey *default_location_key = weather_shared_data_get_key(default_location_index);
@@ -151,6 +153,7 @@ void test_weather_service__get_default_location_forecast_from_weather_db_update(
   cl_assert(forecast);
   prv_assert_forecast_equal(forecast, &s_forecasts[0]);
   weather_service_destroy_default_forecast(forecast);
+  cl_assert_equal_i(sys_weather_get_current_temp(), s_forecasts[0].current_temp);
 
   weather_db_flush();
   PebbleEvent flush_event = (PebbleEvent){
@@ -166,6 +169,7 @@ void test_weather_service__get_default_location_forecast_from_weather_db_update(
   s_event_info->handler(&flush_event, s_event_info->context);
   forecast = weather_service_create_default_forecast();
   cl_assert(!forecast);
+  cl_assert_equal_i(sys_weather_get_current_temp(), WEATHER_SERVICE_LOCATION_FORECAST_UNKNOWN_TEMP);
 }
 
 void test_weather_service__get_default_location_forecast_from_watch_app_prefs_db_update(void) {

@@ -17,6 +17,7 @@ watch), what changed, and how it is tested.
 | 7 | `services/data_logging: run the ack timeout on the storage work queue` | no watchdog reboot when the phone stops acking | `test_data_logging__ack_timeout_runs_on_the_storage_queue` |
 | 8 | `services/data_logging: check for data to send every minute` | was every 5 minutes | `test_data_logging__active_session_is_sent_within_a_minute` |
 | 9 | `sdk: export ... (revision 117)` | the app APIs of 1, 3, 4, 5 in the SDK | (SDK generation) |
+| 10 | `services/weather: the current temperature for apps (revision 118)` | `weather_service_peek_current_temp()` | `tests/pebble/services/test_weather_service.c` |
 
 Changes 6, 7 and 8 are plain bug fixes that stand on their own upstream. 1 to 5 add API and are
 specific to sensor recording, but none of them changes existing behaviour for other apps.
@@ -186,6 +187,22 @@ once, every session is still flushed every 15 minutes.
 The app APIs of 1, 3, 4 and 5 are exported as revision 117 / SDK 0x5.0x74, after upstream's newest
 (116), so apps built with the upstream SDK keep their ABI. When upstream adds revisions, ours move past
 them (`tools/generate_native_sdk/exported_symbols.json`, `pebble_process_info.h`).
+
+## 10. The current temperature for apps
+
+The phone app syncs weather to the watch for its Weather app, and the weather service keeps the
+first location's forecast in memory. Apps had no way to read it, so a watch app that should still
+work as a watch (time and temperature on screen) had to fetch weather on the phone itself.
+
+    int temp;
+    if (weather_service_peek_current_temp(&temp)) snprintf(buf, sizeof(buf), "%d°", temp);
+
+It returns false without data: weather off, no location, or a forecast more than a day old (the
+same rule the Weather app uses). The temperature is in the units the phone sends. Exported as SDK
+revision 118 (0x5.0x75).
+
+Tests: `test_weather_service` checks the temperature is unknown before any forecast arrives, is the
+forecast's after a weather database insert, and unknown again after a flush.
 
 ## Open issue found on the way (not fixed here)
 

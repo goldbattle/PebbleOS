@@ -2,6 +2,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <pbl/kernel/malloc.h>
+#include <pbl/kernel/syscall.h>
 #include <pbl/kernel/mutex.h>
 #include <pbl/logging/logging.h>
 #include <pbl/pp/protocol.h>
@@ -15,6 +16,7 @@
 
 #include <applib/event_service_client.h>
 #include <kernel/events.h>
+#include <syscall/syscall.h>
 
 PBL_LOG_MODULE_DEFINE(service_weather, CONFIG_SERVICE_WEATHER_LOG_LEVEL);
 
@@ -209,6 +211,17 @@ WeatherLocationForecast *weather_service_create_default_forecast(void) {
   }
   pbl_mutex_unlock(&s_mutex);
   return forecast;
+}
+
+PBL_SYSCALL(int, sys_weather_get_current_temp) {
+  pbl_mutex_lock(&s_mutex, PBL_FOREVER);
+  int temp = WEATHER_SERVICE_LOCATION_FORECAST_UNKNOWN_TEMP;
+  if (s_default_forecast &&
+      !prv_entry_update_time_too_old_to_be_valid(s_default_forecast->time_updated_utc)) {
+    temp = s_default_forecast->current_temp;
+  }
+  pbl_mutex_unlock(&s_mutex);
+  return temp;
 }
 
 void weather_service_destroy_default_forecast(WeatherLocationForecast *forecast) {

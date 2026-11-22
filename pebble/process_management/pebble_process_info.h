@@ -191,9 +191,10 @@ typedef enum {
 // sdk.major:0x5 .minor:0x73 -- Add platform_has_feature() (rev 116)
 // sdk.major:0x5 .minor:0x74 -- Aria: IMU data service (gyro, per-sample hw timestamps), time_us, magnetometer
 //                              data service, click_recognizer_get_press_time_us (rev 117)
+// sdk.major:0x5 .minor:0x75 -- Aria: weather_service_peek_current_temp (rev 118)
 
 #define PROCESS_INFO_CURRENT_SDK_VERSION_MAJOR 0x5
-#define PROCESS_INFO_CURRENT_SDK_VERSION_MINOR 0x74
+#define PROCESS_INFO_CURRENT_SDK_VERSION_MINOR 0x75
 
 // The first SDK to ship with 2.x APIs
 #define PROCESS_INFO_FIRST_2X_SDK_VERSION_MAJOR 0x4
