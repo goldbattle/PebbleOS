@@ -10,6 +10,7 @@
 #include <pbl/drivers/i2c.h>
 #include <pbl/drivers/intc.h>
 #include <pbl/kernel/cache.h>
+#include <pbl/kernel/clocksync.h>
 #include <pbl/kernel/compiler.h>
 #include <pbl/kernel/work.h>
 
@@ -47,7 +48,12 @@
 /** @brief FIFO watermark in samples (the FIFO holds up to 512). */
 #define LSM6DSO_FIFO_THRESHOLD 128
 /** @brief Read buffer capacity in samples, sized to the watermark. */
-#define LSM6DSO_FIFO_SIZE LSM6DSO_FIFO_THRESHOLD
+/** FIFO words per time slot at most: accelerometer + gyroscope + timestamp. */
+#define LSM6DSO_FIFO_WORDS_PER_SLOT_MAX 3
+/** Max FIFO words read at once. */
+#define LSM6DSO_FIFO_SIZE (LSM6DSO_FIFO_THRESHOLD * LSM6DSO_FIFO_WORDS_PER_SLOT_MAX)
+/** De-interleaved sample: accelerometer xyz then gyroscope xyz, raw little-endian int16. */
+#define LSM6DSO_OUT_SAMPLE_BYTES 12
 
 /** @brief LSM6DSO driver state, owned by the driver. */
 struct pbl_lsm6dso_state {
@@ -84,6 +90,32 @@ struct pbl_lsm6dso_state {
   bool wu_active;
   /** The INT1 servicing pass was requeued while the pad stayed high. */
   bool int1_requeued;
+  /** Gyroscope enabled (high-performance mode: ultra-low-power is off while it runs). */
+  bool gyro_enabled;
+  /** Accelerometer full-scale range in milli-g (2000, 4000, 8000 or 16000). */
+  uint16_t range_mg;
+  /** Sensor timestamp counter -> watch uptime (continuous line fit, see pbl/kernel/clocksync.h). */
+  struct pbl_clocksync sync;
+  /** Timestamp counter value read with the latest FIFO read. */
+  uint32_t ts_ref;
+  /** Last emitted sample time in sensor ticks, to extrapolate a slot lacking a timestamp. */
+  uint32_t ts_last;
+  bool ts_last_valid;
+  /** FIFO time slot being assembled; may span two FIFO reads. */
+  struct {
+    bool valid;
+    uint8_t cnt;
+    bool has_ts;
+    bool has_xl;
+    bool has_g;
+    uint32_t ts;
+    uint8_t xl[6];
+    uint8_t g[6];
+  } slot;
+  /** De-interleaved samples and their acquisition times, handed to the listener. */
+  uint8_t out_buf[LSM6DSO_FIFO_SIZE / 2 + 1][LSM6DSO_OUT_SAMPLE_BYTES];
+  uint64_t out_ts_us[LSM6DSO_FIFO_SIZE / 2 + 1];
+  uint16_t out_n;
 };
 
 /** @brief LSM6DSO accelerometer. */

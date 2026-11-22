@@ -11,13 +11,13 @@
 typedef struct AccelServiceState {
   // Configuration for our data callback subscription to the accel manager
   AccelManagerState *manager_state;
-  AccelSamplingRate sampling_rate;
+  uint32_t sampling_rate;  // Hz; IMU rates exceed the AccelSamplingRate enum type
   //! Context of the current subscription's data events
   struct AccelSubscriptionToken *token;
   //! Task the data events run on, PebbleTask_Unknown while not subscribed
   PebbleTask handler_task;
   uint16_t samples_per_update;
-  AccelRawData *raw_data; // of size samples_per_update
+  ImuData *raw_data; // of size samples_per_update; full samples with per-sample times
 
   // User-provided callbacks for various events
   AccelDataHandler data_handler;
@@ -25,12 +25,14 @@ typedef struct AccelServiceState {
   AccelTapHandler double_tap_handler;
   AccelRawDataHandler raw_data_handler;
   AccelRawDataHandler__deprecated raw_data_handler_deprecated;
+  ImuDataHandler imu_handler;
+  bool gyro;               // IMU data service: gyroscope requested
+  uint8_t accel_range_g;   // IMU data service: accelerometer range requested, 0 for default
 
   // Configuration for our other types of events
   EventServiceInfo accel_shake_info;
   EventServiceInfo accel_double_tap_info;
 
-  uint64_t prev_timestamp_ms;
 } AccelServiceState;
 
 //! Initialize an existing state object

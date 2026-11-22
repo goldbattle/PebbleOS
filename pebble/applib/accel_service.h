@@ -63,6 +63,30 @@ typedef void (*AccelDataHandler)(AccelData *data, uint32_t num_samples);
 //! @param timestamp the timestamp, in ms, of the first sample.
 typedef void (*AccelRawDataHandler)(AccelRawData *data, uint32_t num_samples, uint64_t timestamp);
 
+//! Callback type for IMU data events
+//! @param data Pointer to the collected samples, each with its own acquisition time
+//! @param num_samples the number of samples stored in data
+typedef void (*ImuDataHandler)(ImuData *data, uint32_t num_samples);
+
+//! Subscribe to the IMU data service: accelerometer (and optionally gyroscope) samples, each
+//! stamped with the time the sensor acquired it (sensor hardware timestamp), in microseconds on
+//! the same clock as time_us(). Replaces any accelerometer data subscription.
+//! @param samples_per_update the number of samples to buffer before calling the handler
+//! @param rate the sampling rate
+//! @param gyro true to also sample the gyroscope (higher power use)
+//! @param handler the callback for batches of samples
+void imu_data_service_subscribe(uint32_t samples_per_update, ImuSamplingRate rate, bool gyro,
+                                ImuDataHandler handler);
+
+//! Subscribe to the IMU data service with a configuration, like imu_data_service_subscribe().
+//! Members of config left at 0 keep their defaults, see ImuConfig.
+//! @param config the configuration; copied, so it may be temporary
+//! @param handler the callback for batches of samples
+void imu_data_service_subscribe_config(const ImuConfig *config, ImuDataHandler handler);
+
+//! Unsubscribe from the IMU data service
+void imu_data_service_unsubscribe(void);
+
 //! Subscribe to the accelerometer tap event service. Once subscribed, the handler
 //! gets called on every tap event emitted by the accelerometer.
 //! @param handler A callback to be executed on tap event

@@ -52,6 +52,24 @@ pbl_clar_test(test_mag_sim
   OVERRIDES dummy_board
 )
 
+pbl_clar_test(test_lsm6dso
+  SOURCES
+    kernel/clocksync.c
+    drivers/base/device.c
+    drivers/imu/accel.c
+    drivers/imu/lsm6dso/lsm6dso.c
+  DEFINES
+    CONFIG_DEVICE_LOG_LEVEL=0
+    CONFIG_DRIVER_IMU_LOG_LEVEL=0
+    CONFIG_ACCEL_LSM6DSO_SCALE_MG=2000
+    CONFIG_ACCEL_LSM6DSO_WK_DUR_DEFAULT=0
+    CONFIG_ACCEL_LSM6DSO_WK_THS_MIN=0
+    CONFIG_ACCEL_LSM6DSO_WK_THS_MAX=63
+    CONFIG_ACCEL_LSM6DSO_WK_THS_DEFAULT=0
+    PBL_NO_LINKER_SCRIPT
+  OVERRIDES dummy_board
+)
+
 pbl_clar_test(test_flash_partition
   SOURCES
     tests/fakes/fake_spi_flash.c

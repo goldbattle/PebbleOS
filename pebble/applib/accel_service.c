@@ -32,7 +32,7 @@ static void prv_assert_session_task(void) {
 typedef struct AccelSubscriptionToken {
   AccelServiceState *state;
   //! Buffer the running handler started with, NULL outside one. Freed only once it returns
-  AccelRawData *handed_raw_data;
+  ImuData *handed_raw_data;
 } AccelSubscriptionToken;
 
 // Assert that a session's data subscription is changed on the task its events run on
@@ -106,46 +106,47 @@ static bool prv_do_data_handle_chunk(AccelSubscriptionToken *token) {
   }
 
   PBL_ASSERTN(state->data_handler != nullptr || state->raw_data_handler != nullptr ||
-              state->raw_data_handler_deprecated != nullptr);
+              state->raw_data_handler_deprecated != nullptr || state->imu_handler != nullptr);
 
-  uint16_t time_interval_ms = 1000 / state->sampling_rate;
-  uint32_t time_since_last_sample =
-      (state->prev_timestamp_ms != 0) ? timestamp_ms - state->prev_timestamp_ms : 0;
-  state->prev_timestamp_ms = timestamp_ms;
-
-  PBL_LOG_VERBOSE("got %d samples for task %d at %" PRIu32 " (%" PRIu32 " ms delta)",
-                  (int)num_samples, (int)pebble_task_get_current(), (uint32_t)timestamp_ms,
-                  time_since_last_sample);
-
-  for (unsigned int i = 0; i < num_samples; i++) {
-    PBL_LOG_VERBOSE("  => x:%d, y:%d, z:%d", state->raw_data[i].x, state->raw_data[i].y,
-                    state->raw_data[i].z);
-  }
+  PBL_LOG_VERBOSE("got %d samples for task %d at %" PRIu32, (int)num_samples,
+                  (int)pebble_task_get_current(), (uint32_t)timestamp_ms);
 
   // Kept until the handler returns, since a raw handler reads it directly
   token->handed_raw_data = state->raw_data;
-  if (state->raw_data_handler_deprecated) {
-    state->raw_data_handler_deprecated(state->raw_data, num_samples);
+  ImuData *imu = state->raw_data;
+  if (state->imu_handler) {
+    state->imu_handler(imu, num_samples);
 
-  } else if (state->raw_data_handler) {
-    state->raw_data_handler(state->raw_data, num_samples, timestamp_ms);
+  } else if (state->raw_data_handler_deprecated || state->raw_data_handler) {
+    // Compact to AccelRawData in place: entry i moves from byte 20*i to 6*i, never past its source
+    AccelRawData *raw = (AccelRawData *)imu;
+    for (uint32_t i = 0; i < num_samples; i++) {
+      AccelRawData r = {.x = imu[i].ax, .y = imu[i].ay, .z = imu[i].az};
+      raw[i] = r;
+    }
+    if (state->raw_data_handler_deprecated) {
+      state->raw_data_handler_deprecated(raw, num_samples);
+    } else {
+      state->raw_data_handler(raw, num_samples, timestamp_ms);
+    }
 
   } else {
     AccelData data[num_samples];
     for (uint32_t i = 0; i < num_samples; i++) {
+      // Each sample's own acquisition time (was: first time + i * nominal interval)
+      uint64_t ts_ms = imu[i].timestamp_us / 1000;
       data[i] = (AccelData){
-        .x = state->raw_data[i].x,
-        .y = state->raw_data[i].y,
-        .z = state->raw_data[i].z,
-        .timestamp = timestamp_ms,
-        .did_vibrate = sys_vibe_history_was_vibrating(timestamp_ms)
+        .x = imu[i].ax,
+        .y = imu[i].ay,
+        .z = imu[i].az,
+        .timestamp = ts_ms,
+        .did_vibrate = sys_vibe_history_was_vibrating(ts_ms)
       };
-      timestamp_ms += time_interval_ms;
     }
     state->data_handler(data, num_samples);
   }
 
-  AccelRawData *handed_raw_data = token->handed_raw_data;
+  ImuData *handed_raw_data = token->handed_raw_data;
   token->handed_raw_data = nullptr;
   // Dropped in the handler, so the state may be gone and the token owns the buffer it handed out
   if (!token->state) {
@@ -212,7 +213,7 @@ static void prv_drop_subscription(AccelServiceState *state) {
 // ----------------------------------------------------------------------------------------------
 // Clamps the batch size and allocates its buffer. A batch size of 0 needs no buffer, and
 // applib_malloc(0) returns NULL
-static bool prv_alloc_raw_data(uint32_t *samples_per_update, AccelRawData **raw_data) {
+static bool prv_alloc_raw_data(uint32_t *samples_per_update, ImuData **raw_data) {
   uint32_t max_samples_per_update = sys_accel_manager_get_max_samples_per_update();
   if (*samples_per_update > max_samples_per_update) {
     APP_LOG(LOG_LEVEL_WARNING, "%d samples per update requested, max is %d",
@@ -224,7 +225,7 @@ static bool prv_alloc_raw_data(uint32_t *samples_per_update, AccelRawData **raw_
     return true;
   }
   // This is a packed array of simple types and therefore shouldn't have compatibility padding
-  *raw_data = applib_malloc(*samples_per_update * sizeof(AccelRawData));
+  *raw_data = applib_malloc(*samples_per_update * sizeof(ImuData));
   if (!*raw_data) {
     APP_LOG(LOG_LEVEL_ERROR, "Not enough memory to subscribe");
     return false;
@@ -236,16 +237,17 @@ static bool prv_alloc_raw_data(uint32_t *samples_per_update, AccelRawData **raw_
 // Subscribing again replaces the current subscription. The new one is set up in full before the
 // old one is removed, so a failure leaves the current one as it is, and the manager is never left
 // without a subscriber in between.
-static void prv_shared_subscribe(AccelServiceState *state, AccelSamplingRate sampling_rate,
+static void prv_shared_subscribe(AccelServiceState *state, uint32_t sampling_rate,
                                  uint32_t samples_per_update, AccelDataHandler data_handler,
                                  AccelRawDataHandler raw_data_handler,
-                                 AccelRawDataHandler__deprecated raw_data_handler_deprecated) {
+                                 AccelRawDataHandler__deprecated raw_data_handler_deprecated,
+                                 ImuDataHandler imu_handler, const ImuConfig *imu) {
   prv_assert_handler_task(state);
   // No handler to deliver to, so treat it as a batch size of 0
-  if (!data_handler && !raw_data_handler && !raw_data_handler_deprecated) {
+  if (!data_handler && !raw_data_handler && !raw_data_handler_deprecated && !imu_handler) {
     samples_per_update = 0;
   }
-  AccelRawData *raw_data;
+  ImuData *raw_data;
   if (!prv_alloc_raw_data(&samples_per_update, &raw_data)) {
     return;
   }
@@ -260,7 +262,9 @@ static void prv_shared_subscribe(AccelServiceState *state, AccelSamplingRate sam
   PebbleTask handler_task = pebble_task_get_current();
   AccelManagerState *manager_state =
       sys_accel_manager_data_subscribe(sampling_rate, prv_do_data_handle, token, handler_task);
-  if (sys_accel_manager_set_sample_buffer(manager_state, raw_data, samples_per_update) != 0) {
+  ImuConfig cfg = imu ? *imu : (ImuConfig){0};
+  if (sys_accel_manager_set_imu_buffer(manager_state, raw_data, samples_per_update, cfg.gyro,
+                                       cfg.accel_range_g * 1000U) != 0) {
     sys_accel_manager_data_unsubscribe(manager_state);
     applib_free(raw_data);
     applib_free(token);
@@ -278,6 +282,9 @@ static void prv_shared_subscribe(AccelServiceState *state, AccelSamplingRate sam
   state->data_handler = data_handler;
   state->raw_data_handler = raw_data_handler;
   state->raw_data_handler_deprecated = raw_data_handler_deprecated;
+  state->imu_handler = imu_handler;
+  state->gyro = cfg.gyro;
+  state->accel_range_g = cfg.accel_range_g;
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -296,7 +303,31 @@ void accel_raw_data_service_subscribe(uint32_t samples_per_update, AccelRawDataH
 void accel_data_service_subscribe__deprecated(uint32_t samples_per_update,
                                               AccelRawDataHandler__deprecated handler) {
   AccelServiceState *session = accel_service_private_get_session(PebbleTask_Unknown);
-  prv_shared_subscribe(session, ACCEL_SAMPLING_25HZ, samples_per_update, nullptr, nullptr, handler);
+  prv_shared_subscribe(session, ACCEL_SAMPLING_25HZ, samples_per_update, nullptr, nullptr, handler,
+                       nullptr, nullptr);
+}
+
+// ----------------------------------------------------------------------------------------------
+void imu_data_service_subscribe(uint32_t samples_per_update, ImuSamplingRate rate, bool gyro,
+                                ImuDataHandler handler) {
+  ImuConfig config = {.samples_per_update = samples_per_update, .rate = rate, .gyro = gyro};
+  imu_data_service_subscribe_config(&config, handler);
+}
+
+// ----------------------------------------------------------------------------------------------
+// ImuConfig only grows at its end. An app built with an older SDK passes the shorter struct it
+// knows, so a member added later must be read only when sys_get_current_app_sdk_version() has it,
+// and default to 0 otherwise.
+void imu_data_service_subscribe_config(const ImuConfig *config, ImuDataHandler handler) {
+  AccelServiceState *session = accel_service_private_get_session(PebbleTask_Unknown);
+  prv_shared_subscribe(session, (uint32_t)config->rate, config->samples_per_update, nullptr,
+                       nullptr, nullptr, handler, config);
+}
+
+// ----------------------------------------------------------------------------------------------
+void imu_data_service_unsubscribe(void) {
+  AccelServiceState *session = accel_service_private_get_session(PebbleTask_Unknown);
+  accel_session_data_unsubscribe(session);
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -442,13 +473,15 @@ void accel_session_double_tap_unsubscribe(AccelServiceState *state) {
 // -----------------------------------------------------------------------------------------------
 void accel_session_data_subscribe(AccelServiceState *state, uint32_t samples_per_update,
                                   AccelDataHandler handler) {
-  prv_shared_subscribe(state, ACCEL_SAMPLING_25HZ, samples_per_update, handler, nullptr, nullptr);
+  prv_shared_subscribe(state, ACCEL_SAMPLING_25HZ, samples_per_update, handler, nullptr, nullptr,
+                       nullptr, nullptr);
 }
 
 // -----------------------------------------------------------------------------------------------
 void accel_session_raw_data_subscribe(AccelServiceState *state, AccelSamplingRate sampling_rate,
                                       uint32_t samples_per_update, AccelRawDataHandler handler) {
-  prv_shared_subscribe(state, sampling_rate, samples_per_update, nullptr, handler, nullptr);
+  prv_shared_subscribe(state, sampling_rate, samples_per_update, nullptr, handler, nullptr,
+                       nullptr, nullptr);
 }
 
 // -----------------------------------------------------------------------------------------------
@@ -461,12 +494,15 @@ void accel_session_data_unsubscribe(AccelServiceState *state) {
   state->data_handler = nullptr;
   state->raw_data_handler = nullptr;
   state->raw_data_handler_deprecated = nullptr;
+  state->imu_handler = nullptr;
+  state->gyro = false;
+  state->accel_range_g = 0;
 }
 
 // -----------------------------------------------------------------------------------------------
 int accel_session_set_sampling_rate(AccelServiceState *state, AccelSamplingRate rate) {
-  if (!state->manager_state ||
-      (!state->data_handler && !state->raw_data_handler && !state->raw_data_handler_deprecated)) {
+  if (!state->manager_state || (!state->data_handler && !state->raw_data_handler &&
+                                !state->raw_data_handler_deprecated && !state->imu_handler)) {
     return -1;
   }
   prv_assert_handler_task(state);
@@ -480,18 +516,19 @@ int accel_session_set_sampling_rate(AccelServiceState *state, AccelSamplingRate 
 
 // -----------------------------------------------------------------------------------------------
 int accel_session_set_samples_per_update(AccelServiceState *state, uint32_t samples_per_update) {
-  if (!state->manager_state || (samples_per_update > 0 && !state->data_handler &&
-                                !state->raw_data_handler && !state->raw_data_handler_deprecated)) {
+  if (!state->manager_state ||
+      (samples_per_update > 0 && !state->data_handler && !state->raw_data_handler &&
+       !state->raw_data_handler_deprecated && !state->imu_handler)) {
     return -1;
   }
   prv_assert_handler_task(state);
-  AccelRawData *new_buf;
+  ImuData *new_buf;
   if (!prv_alloc_raw_data(&samples_per_update, &new_buf)) {
     return -1;
   }
 
-  int result =
-      sys_accel_manager_set_sample_buffer(state->manager_state, new_buf, samples_per_update);
+  int result = sys_accel_manager_set_imu_buffer(state->manager_state, new_buf, samples_per_update,
+                                                state->gyro, state->accel_range_g * 1000U);
   if (result != 0) {
     // The manager still writes into the old buffer, so keep it
     applib_free(new_buf);
