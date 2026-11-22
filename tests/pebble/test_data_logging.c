@@ -664,3 +664,35 @@ void test_data_logging__ack_timeout_runs_on_the_storage_queue(void) {
   cl_assert(timeout->work.q == &pbl_sys_workq);
   cl_assert(fake_work_timeout_ms(timeout) <= 30000U);
 }
+
+// ----------------------------------------------------------------------------------------
+// An active session is sent by the periodic check. A sensor stream fills the ~560 KB store within
+// minutes, and with a check every 5 minutes it overflowed before its first upload (the full store
+// then drops the oldest half of the session). The check runs every minute.
+void test_data_logging__active_session_is_sent_within_a_minute(void) {
+  DataLoggingSessionRef logging_session =
+      data_logging_create(0x1234, DATA_LOGGING_BYTE_ARRAY, 100, false);
+  cl_assert(logging_session);
+  fake_sys_work_callbacks_invoke_pending();
+
+  // The phone acks the session open
+  fake_comm_session_process_send_next();
+  uint8_t ack[] = {~DLS_ENDPOINT_CMD_MASK | DataLoggingEndpointCmdAck,
+                   dls_test_get_session_id(logging_session)};
+  data_logging_protocol_msg_callback(pbl_pp_session_get_system(), ack, sizeof(ack));
+  fake_sys_work_callbacks_invoke_pending();
+
+  // 10000 B logged, the session still open: nothing goes out by itself
+  prv_log_random_data(logging_session, 100, 100);
+  s_prev_send_data_bytes = 0;
+  fake_comm_session_process_send_next();
+  cl_assert_equal_i(s_prev_send_data_bytes, 0);
+
+  // One minute later the check sends it
+  fake_wallclock_work_advance(60, 1);
+  for (int i = 0; i < 4; i++) {
+    fake_sys_work_callbacks_invoke_pending();
+  }
+  fake_comm_session_process_send_next();
+  cl_assert(s_prev_send_data_bytes > 0);
+}

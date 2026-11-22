@@ -35,7 +35,9 @@ static bool s_initialized = false;
 static bool s_sends_enabled_pp = true;
 static bool s_sends_enabled_run_level = true;
 
-#define DATALOGGING_DO_FLUSH_CHECK_INTERVAL_MINUTES 5
+// Was 5. The store (~560 KB) holds only ~4 min of a 104 Hz accel+gyro+mag stream, so with a 5 minute
+// check an active session overflowed before its first upload and the store dropped half of it.
+#define DATALOGGING_DO_FLUSH_CHECK_INTERVAL_MINUTES 1
 
 static bool prv_sends_enabled(void) {
   return (s_sends_enabled_run_level && s_sends_enabled_pp);
@@ -68,7 +70,7 @@ static bool prv_add_send_entry_cb(DataLoggingSession *session, void *data) {
   DataLoggingSendBuildCtx *ctx = (DataLoggingSendBuildCtx *)data;
   DataLoggingSendEntry *entry = pbl_malloc(sizeof(DataLoggingSendEntry));
   if (!entry) {
-    // OOM: send what we already queued; the next 5-minute tick will retry.
+    // OOM: send what we already queued; the next periodic check will retry.
     PBL_LOG_WRN("OOM building DLS flush list; truncating pass");
     return false;
   }
