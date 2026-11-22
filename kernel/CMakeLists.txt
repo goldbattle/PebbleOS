@@ -4,6 +4,7 @@
 pbl_library_named(kernel)
 pbl_library_kind(stlib)
 pbl_library_sources(
+  clocksync.c
   debug.c
   fatal.c
   heap.c
