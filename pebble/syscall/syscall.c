@@ -41,6 +41,10 @@ PBL_SYSCALL(void, sys_get_time_ms, (OUT, time_t *, t), (OUT, uint16_t *, out_ms)
   *out_ms = (uint16_t)(now_ms % 1000U);
 }
 
+PBL_SYSCALL(uint64_t, sys_get_time_us) {
+  return pbl_realtime_us();
+}
+
 PBL_SYSCALL(uint64_t, sys_get_ticks) {
   return pbl_uptime_ticks();
 }

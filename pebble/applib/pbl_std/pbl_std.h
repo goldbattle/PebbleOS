@@ -114,6 +114,10 @@ size_t pbl_strftime(char *s, size_t maxsize, const char *format, const struct pb
 
 // The firmware's own versions of the above, with a full-width time_t.
 uint16_t time_ms(time_t *tloc, uint16_t *out_ms);
+
+//! Current UTC time in microseconds since the epoch: the clock of time_ms() at microsecond
+//! resolution, and the clock of ImuData.timestamp_us.
+uint64_t time_us(void);
 struct pbl_tm *pbl_override_localtime(const time_t *timep);
 struct pbl_tm *pbl_override_gmtime(const time_t *timep);
 time_t pbl_override_mktime(struct pbl_tm *tb);

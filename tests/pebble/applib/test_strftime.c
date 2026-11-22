@@ -20,6 +20,10 @@
 void sys_get_time_ms(time_t *t, uint16_t *out_ms) {
 }
 
+uint64_t sys_get_time_us(void) {
+  return 0;
+}
+
 time_t sys_time_utc_to_local(time_t t) {
   return t;
 }

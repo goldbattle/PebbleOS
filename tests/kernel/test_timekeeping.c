@@ -4,6 +4,7 @@
 #include <pbl/drivers/timer.h>
 #include <pbl/kernel/idle.h>
 #include <pbl/kernel/irq.h>
+#include <pbl/kernel/time.h>
 
 #include <clar.h>
 #include <kernel.h>
@@ -112,4 +113,23 @@ void test_timekeeping__waking_up_with_no_timer_due_raises_the_next_tick(void) {
   idle_enter(1U);
   cl_assert_equal_i(s_ticks, 1);
   cl_assert_equal_i(s_last_delta, CYCLES_PER_TICK);
+}
+
+// The microsecond clocks advance by exactly the elapsed time and agree with the millisecond wall
+// clock, and wall clock = uptime + offset, also after the time was set.
+void test_timekeeping__microsecond_clocks(void) {
+  const uint64_t up0 = pbl_uptime_us();
+  s_counter += PBL_TICK_HZ * CYCLES_PER_TICK;  // one second of clock source cycles
+  cl_assert(pbl_uptime_us() - up0 == 1000000U);
+
+  pbl_realtime_set(1795313518);
+  const uint64_t rt = pbl_realtime_us();
+  cl_assert(rt / 1000000U == 1795313518U);
+  cl_assert(pbl_realtime_ms() == rt / 1000U);
+  cl_assert((int64_t)rt - (int64_t)pbl_uptime_us() == pbl_realtime_offset_us());
+
+  // A quarter of a second later, at microsecond resolution
+  s_counter += PBL_TICK_HZ * CYCLES_PER_TICK / 4U;
+  cl_assert(pbl_realtime_us() - rt == 250000U);
+  cl_assert(pbl_realtime_ms() == pbl_realtime_us() / 1000U);
 }
