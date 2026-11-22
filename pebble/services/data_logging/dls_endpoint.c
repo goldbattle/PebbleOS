@@ -182,7 +182,10 @@ static void reschedule_ack_timeout(void) {
   uint64_t ticks_until_timeout = soonest_ack_timeout - current_ticks;
   uint32_t ms_until_timeout = ((uint64_t)ticks_until_timeout * 1000) / PBL_TICK_HZ;
 
-  pbl_delayed_work_reschedule(&pbl_sys_workq_high, &s_endpoint_data.ack_timer,
+  // On the storage work queue, not pbl_sys_workq_high: ack_timer_cb takes the session list lock,
+  // which storage work holds for seconds while it compacts a full store. Blocked there, the high
+  // priority queue starves and the task watchdog reboots the watch.
+  pbl_delayed_work_reschedule(&pbl_sys_workq, &s_endpoint_data.ack_timer,
                               PBL_MSEC(ms_until_timeout));
 }
 
