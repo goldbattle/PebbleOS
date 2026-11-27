@@ -70,7 +70,7 @@ typedef void (*ImuDataHandler)(ImuData *data, uint32_t num_samples);
 
 //! Subscribe to the IMU data service: accelerometer (and optionally gyroscope) samples, each
 //! stamped with the time the sensor acquired it (sensor hardware timestamp), in microseconds on
-//! the same clock as time_us(). Replaces any accelerometer data subscription.
+//! the time_us() clock (monotonic, since boot). Replaces any accelerometer data subscription.
 //! @param samples_per_update the number of samples to buffer before calling the handler
 //! @param rate the sampling rate
 //! @param gyro true to also sample the gyroscope (higher power use)

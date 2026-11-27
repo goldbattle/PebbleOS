@@ -132,9 +132,11 @@ static bool prv_do_data_handle_chunk(AccelSubscriptionToken *token) {
 
   } else {
     AccelData data[num_samples];
+    const int64_t realtime_offset_us = sys_get_realtime_offset_us();
     for (uint32_t i = 0; i < num_samples; i++) {
-      // Each sample's own acquisition time (was: first time + i * nominal interval)
-      uint64_t ts_ms = imu[i].timestamp_us / 1000;
+      // Each sample's own acquisition time (was: first time + i * nominal interval), turned from the
+      // uptime clock of ImuData into the wall clock milliseconds AccelData reports
+      uint64_t ts_ms = (uint64_t)((int64_t)imu[i].timestamp_us + realtime_offset_us) / 1000;
       data[i] = (AccelData){
         .x = imu[i].ax,
         .y = imu[i].ay,

@@ -150,7 +150,7 @@ typedef struct PBL_PACKED { // 1 byte
 
 typedef struct PBL_PACKED { // 5 bytes
   ButtonId button_id;
-  uint32_t timestamp_us_lo;  //<! low 32 bits of pbl_realtime_us() of the physical edge
+  uint32_t timestamp_us_lo;  //<! low 32 bits of pbl_uptime_us() of the physical edge
 } PebbleButtonEvent;
 
 typedef enum PhoneEventType {

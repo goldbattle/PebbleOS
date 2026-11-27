@@ -7,7 +7,7 @@
 PBL_ITERABLE_SECTION_DECLARE(const struct pbl_input_callback, input_cbs);
 
 void pbl_input_report(enum pbl_input_type type, uint16_t code, int32_t value, bool sync) {
-  pbl_input_report_at(type, code, value, sync, pbl_realtime_us());
+  pbl_input_report_at(type, code, value, sync, pbl_uptime_us());
 }
 
 void pbl_input_report_at(enum pbl_input_type type, uint16_t code, int32_t value, bool sync,

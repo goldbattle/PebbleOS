@@ -82,7 +82,7 @@ struct pbl_input_event {
   uint16_t code;
   /** Value, depending on @ref type. */
   int32_t value;
-  /** When it physically happened, pbl_realtime_us(). The report time unless the driver knows
+  /** When it physically happened, pbl_uptime_us(). The report time unless the driver knows
    *  better (e.g. a debounced key reports the time of its first edge). */
   uint64_t timestamp_us;
 };

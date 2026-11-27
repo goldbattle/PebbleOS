@@ -92,7 +92,7 @@ typedef struct PBL_PACKED ImuData {
   int16_t gy;
   /** angular rate around the z axis, in 0.1 degrees per second */
   int16_t gz;
-  /** acquisition time from the sensor's own timestamp, in microseconds since the epoch, on the
-   * same clock as time_us() and time_ms() */
+  /** acquisition time from the sensor's own timestamp, in microseconds on the time_us() clock
+   * (since boot, monotonic: setting the time never moves it) */
   uint64_t timestamp_us;
 } ImuData;

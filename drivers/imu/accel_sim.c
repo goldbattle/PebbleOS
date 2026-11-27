@@ -21,7 +21,7 @@ static struct pbl_delayed_work s_timer;
 static void prv_construct_sample(struct pbl_accel_sample *sample) {
   *sample = (struct pbl_accel_sample){
     // Microsecond stamp: the timer can fire twice within one millisecond after running late
-    .timestamp_us = pbl_realtime_us(),
+    .timestamp_us = pbl_uptime_us(),  // sample stamps are uptime (accel manager)
     .x = s_latest.x,
     .y = s_latest.y,
     .z = s_latest.z,

@@ -40,6 +40,10 @@ time_t sys_get_time(void);
 void sys_get_time_ms(time_t *t, uint16_t *out_ms);
 
 uint64_t sys_get_time_us(void);
+
+//! Wall clock minus the time_us() clock, in microseconds: turns a sensor or press stamp into wall
+//! clock time for the APIs that report wall clock milliseconds.
+int64_t sys_get_realtime_offset_us(void);
 uint64_t sys_get_ticks(void);
 struct pbl_tm *sys_gmtime_r(const time_t *timep, struct pbl_tm *result);
 struct pbl_tm *sys_localtime_r(const time_t *timep, struct pbl_tm *result);

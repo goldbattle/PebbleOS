@@ -8,8 +8,8 @@
 
 #include <clar.h>
 
-// pbl_input_report() stamps events with the kernel clock
-uint64_t pbl_realtime_us(void) {
+// pbl_input_report() stamps events with the kernel's monotonic clock
+uint64_t pbl_uptime_us(void) {
   return 0;
 }
 

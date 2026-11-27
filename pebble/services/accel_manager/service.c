@@ -11,6 +11,7 @@
 #include <pbl/kernel/malloc.h>
 #include <pbl/kernel/mutex.h>
 #include <pbl/kernel/syscall.h>
+#include <pbl/kernel/time.h>
 #include <pbl/kernel/work.h>
 #include <pbl/logging/logging.h>
 #include <pbl/mcu/interrupts.h>
@@ -325,7 +326,8 @@ static void prv_dispatch_data(bool post_event) {
       // exact timestamp with every sample
       uint64_t ts_us = s_last_empty_timestamp_us + data.timestamp_delta_us;
       if (state->num_samples == 0) {
-        state->timestamp_ms = ts_us / 1000;
+        // samples are stamped on uptime; the legacy API reports wall clock milliseconds
+        state->timestamp_ms = (uint64_t)((int64_t)ts_us + pbl_realtime_offset_us()) / 1000;
       }
 
       if (state->imu_buffer) {
@@ -426,7 +428,8 @@ static void prv_copy_accel_sample_to_accel_data(const struct pbl_accel_sample *a
     .x = accel_sample->x,
     .y = accel_sample->y,
     .z = accel_sample->z,
-    .timestamp /* ms */ = (accel_sample->timestamp_us / 1000),
+    // samples are stamped on uptime; AccelData.timestamp is wall clock milliseconds
+    .timestamp /* ms */ = (uint64_t)((int64_t)accel_sample->timestamp_us + pbl_realtime_offset_us()) / 1000,
     .did_vibrate = (sys_vibe_get_vibe_strength() != VIBE_STRENGTH_OFF)
   };
 }

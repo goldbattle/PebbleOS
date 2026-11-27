@@ -16,8 +16,10 @@ watch), what changed, and how it is tested.
 | 6 | `services/data_logging: run the ack timeout on the storage work queue` | no watchdog reboot when the phone stops acking | `test_data_logging__ack_timeout_runs_on_the_storage_queue` |
 | 7 | `services/data_logging: check for data to send every minute` | was every 5 minutes | `test_data_logging__active_session_is_sent_within_a_minute` |
 | 8 | `sdk: export ... (revision 117)` | the app APIs of 1, 3 and 4 in the SDK | (SDK generation) |
+| 9 | `time: app sensor and press stamps on the monotonic clock` | `time_us()`, `ImuData.timestamp_us` and press times count from boot: the phone setting the time never moves them | `test_lsm6dso`, `test_accel_service` |
 
-Changes 5, 6 and 7 are plain bug fixes that stand on their own upstream. 1 to 4 add API and are
+Changes 5, 6 and 7 are plain bug fixes that stand on their own upstream. 1 to 4 add API (9 puts their stamps on
+the monotonic clock) and are
 specific to sensor recording, but none of them changes existing behaviour for other apps.
 
 ## 1. Microsecond clocks and `time_us()`
@@ -161,6 +163,23 @@ once, every session is still flushed every 15 minutes.
 The app APIs of 1, 3 and 4 are exported as revision 117 / SDK 0x5.0x74, after upstream's newest
 (116), so apps built with the upstream SDK keep their ABI. When upstream adds revisions, ours move past
 them (`tools/generate_native_sdk/exported_symbols.json`, `pebble_process_info.h`).
+
+## 9. Sensor and press stamps on the monotonic clock
+
+**Problem.** Changes 1, 3 and 4 stamped samples and presses on the wall clock (uptime + the wall clock
+offset). The phone app sets the watch's time whenever it reconnects, so after every Bluetooth outage the
+stamps jumped: +331 ms on our watch after a one-minute outage, -295 ms in the emulator. A recording then
+had samples out of order, and the clock sync between watch and phone had to guess where the jump was. A
+backward set also made the accel manager's 32-bit time delta wrap (a +71 min jump).
+
+**Change.** The IMU drivers (LSM6DSO, LIS2DW12, the emulator's) stamp samples on `pbl_uptime_us()`;
+button edges are stamped on it too; the app call `time_us()` returns it. The APIs that report wall clock
+milliseconds (`AccelData.timestamp`, the raw handler's time) add `pbl_realtime_offset_us()` when they
+convert, so other apps see what they did before. An app that wants wall clock time keeps using `time()` /
+`time_ms()`.
+
+**Tests.** `test_lsm6dso`: with a wall clock offset in the fake clock, no stamp contains it.
+`test_accel_service`: `AccelData` still gets wall clock milliseconds.
 
 ## Open issue found on the way (not fixed here)
 

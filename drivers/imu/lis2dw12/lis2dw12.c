@@ -220,7 +220,7 @@ static void prv_raw_to_mg(const uint8_t *raw, struct pbl_accel_sample *sample) {
 }
 
 static uint64_t prv_get_curr_system_time_us(void) {
-  return pbl_realtime_ms() * 1000ULL;
+  return pbl_uptime_us();  // sample stamps are uptime (accel manager)
 }
 
 // Convert and dispatch the samples already sitting in raw_sample_buf. Kept free of

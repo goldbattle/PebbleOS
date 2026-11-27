@@ -25,6 +25,14 @@ int32_t sys_vibe_get_vibe_strength(void) {
   return 0;
 }
 
+// Wall clock minus the uptime clock samples are stamped on: AccelData reports wall clock ms
+#define REALTIME_OFFSET_US 1795000000000000LL
+#define REALTIME_OFFSET_MS (REALTIME_OFFSET_US / 1000)
+
+int64_t sys_get_realtime_offset_us(void) {
+  return REALTIME_OFFSET_US;
+}
+
 // The app and worker states live inside their process state, not on any heap
 static AccelServiceState s_app_state;
 static AccelServiceState s_worker_state;
@@ -439,14 +447,15 @@ void test_accel_service__subscribing_again_resets_the_sampling_rate(void) {
   accel_data_service_subscribe(2, prv_data_handler);
   accel_service_set_sampling_rate(ACCEL_SAMPLING_100HZ);
   accel_data_service_subscribe(2, prv_data_handler);
-  // Samples carry their own acquisition times now; the service no longer spaces them by the rate
+  // Samples carry their own acquisition times now (on uptime; AccelData gets them as wall clock
+  // ms); the service no longer spaces them by the rate
   s_app_state.raw_data[0].timestamp_us = 1000000;
   s_app_state.raw_data[1].timestamp_us = 1040000;
 
   prv_deliver(2);
 
-  cl_assert_equal_i(s_timestamps[0], 1000);
-  cl_assert_equal_i(s_timestamps[1], 1040);
+  cl_assert(s_timestamps[0] == REALTIME_OFFSET_MS + 1000);
+  cl_assert(s_timestamps[1] == REALTIME_OFFSET_MS + 1040);
 }
 
 //! A rate the manager turns down isn't kept. The samples still arrive at the old rate, so spacing
@@ -460,8 +469,8 @@ void test_accel_service__a_rejected_sampling_rate_is_not_kept(void) {
 
   prv_deliver(2);
 
-  cl_assert_equal_i(s_timestamps[0], 2000);
-  cl_assert_equal_i(s_timestamps[1], 2010);
+  cl_assert(s_timestamps[0] == REALTIME_OFFSET_MS + 2000);
+  cl_assert(s_timestamps[1] == REALTIME_OFFSET_MS + 2010);
 }
 
 // Changing the batch size

@@ -293,10 +293,11 @@ static void prv_int1(void) {
   s_work_cb(s_work_data);
 }
 
-//! Expected sample time: uptime at the read minus the sample's age in sensor ticks.
+//! Expected sample time: uptime at the read minus the sample's age in sensor ticks. On uptime, not
+//! the wall clock: the fake's wall clock offset (RT_OFFSET_US) must not show up in any stamp.
 static uint64_t prv_expect_ts(uint32_t ts_ref, uint32_t ts, double tick_us) {
   double age_us = (double)(int32_t)(ts_ref - ts) * tick_us;
-  return (uint64_t)((int64_t)s_uptime_us - (int64_t)(age_us + 0.5) + RT_OFFSET_US);
+  return (uint64_t)((int64_t)s_uptime_us - (int64_t)(age_us + 0.5));
 }
 
 static void prv_setup(int8_t freq_fine) {
@@ -365,15 +366,14 @@ void test_lsm6dso__accel_only_stream(void) {
   cl_assert_equal_i(s_gyro_den, 0);
   for (int k = 0; k < 5; k++) {
     prv_check_xl(k, k);
-    // up 1000000 - (40 + 385*(4-k)) * 25 us + offset
-    uint64_t expect = 1000000ULL - (uint64_t)(TS_REF_AHEAD + TS_STEP * (4 - k)) * 25 +
-                      (uint64_t)RT_OFFSET_US;
+    // up 1000000 - (40 + 385*(4-k)) * 25 us (uptime: no wall clock offset)
+    uint64_t expect = 1000000ULL - (uint64_t)(TS_REF_AHEAD + TS_STEP * (4 - k)) * 25;
     cl_assert(s_got[k].ts == expect);
     cl_assert(s_got[k].ts == prv_expect_ts(s_ts_ref, TS_BASE + TS_STEP * k, 25.0));
   }
   // Last sample: 40 ticks (1000 us) before the read
-  cl_assert(s_got[4].ts == 1700000000000000ULL + 999000ULL);
-  cl_assert(s_got[0].ts == 1700000000000000ULL + 1000000ULL - 1540ULL * 25 - 1000ULL);
+  cl_assert(s_got[4].ts == 999000ULL);
+  cl_assert(s_got[0].ts == 1000000ULL - 1540ULL * 25 - 1000ULL);
 }
 
 static int prv_set_gyro(bool on) {
@@ -437,7 +437,7 @@ static void prv_gyro_stream(bool ts_first) {
     prv_check_g(k, k);
     cl_assert(s_got[k].ts == prv_expect_ts(s_ts_ref, TS_BASE + TS_STEP * k, 25.0));
     cl_assert(s_got[k].ts ==
-              1700000000000000ULL + 1000000ULL - (uint64_t)(40 + 385 * (2 - k)) * 25);
+              1000000ULL - (uint64_t)(40 + 385 * (2 - k)) * 25);
   }
 
   cl_assert_equal_i(prv_set_gyro(false), 0);
@@ -485,8 +485,8 @@ void test_lsm6dso__slot_split_across_reads(void) {
   prv_check_xl(3, 3);
   cl_assert(s_got[2].ts == prv_expect_ts(s_ts_ref, TS_BASE + TS_STEP * 2, 25.0));
   cl_assert(s_got[2].ts ==
-            1700000000000000ULL + 1000000ULL + 770ULL * 25 - (uint64_t)(40 + 385) * 25);
-  cl_assert(s_got[3].ts == 1700000000000000ULL + 1000000ULL + 770ULL * 25 - 40ULL * 25);
+            1000000ULL + 770ULL * 25 - (uint64_t)(40 + 385) * 25);
+  cl_assert(s_got[3].ts == 1000000ULL + 770ULL * 25 - 40ULL * 25);
 }
 
 void test_lsm6dso__freq_fine_tick(void) {
@@ -509,8 +509,8 @@ void test_lsm6dso__freq_fine_tick(void) {
     cl_assert(s_got[k].ts == expect);
   }
   // 40 ticks = 985.2 us -> 985 us before the read; 1580 ticks = 38916.25 -> 38915 us
-  cl_assert(s_got[4].ts == 1700000000000000ULL + 1000000ULL - 985ULL);
-  cl_assert(s_got[0].ts == 1700000000000000ULL + 1000000ULL - 38916ULL);
+  cl_assert(s_got[4].ts == 1000000ULL - 985ULL);
+  cl_assert(s_got[0].ts == 1000000ULL - 38916ULL);
 }
 
 // Starting the stream or switching the gyroscope (ULP <-> high-performance oscillator) restarts the

@@ -42,7 +42,11 @@ PBL_SYSCALL(void, sys_get_time_ms, (OUT, time_t *, t), (OUT, uint16_t *, out_ms)
 }
 
 PBL_SYSCALL(uint64_t, sys_get_time_us) {
-  return pbl_realtime_us();
+  return pbl_uptime_us();
+}
+
+PBL_SYSCALL(int64_t, sys_get_realtime_offset_us) {
+  return pbl_realtime_offset_us();
 }
 
 PBL_SYSCALL(uint64_t, sys_get_ticks) {

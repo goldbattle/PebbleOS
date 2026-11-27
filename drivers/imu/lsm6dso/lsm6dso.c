@@ -286,7 +286,7 @@ static void prv_raw_to_mg(const uint8_t *raw, struct pbl_accel_sample *sample) {
 }
 
 static uint64_t prv_get_curr_system_time_us(void) {
-  return pbl_realtime_us();
+  return pbl_uptime_us();
 }
 
 static uint32_t prv_le32(const uint8_t *p) {
@@ -298,13 +298,11 @@ static uint8_t prv_words_per_slot(void) {
   return s_dev->state->gyro_enabled ? 3U : 2U;  // [gyro] + accel + timestamp
 }
 
-//! Sensor ticks -> wall clock microseconds. The sensor counter runs on the LSM6DSO's own
-//! oscillator; the clocksync fit maps it onto monotonic uptime (offset and rate, refitted at every
-//! FIFO read), so a wall clock change (the phone setting the time) can't bend it.
-static uint64_t prv_ticks_to_realtime_us(uint32_t ts) {
-  int64_t us =
-      (int64_t)pbl_clocksync_to_uptime_us(&s_dev->state->sync, ts) + pbl_realtime_offset_us();
-  return (us > 0) ? (uint64_t)us : 0U;
+//! Sensor ticks -> uptime microseconds. The sensor counter runs on the LSM6DSO's own oscillator;
+//! the clocksync fit maps it onto monotonic uptime (offset and rate, refitted at every FIFO read).
+//! Samples stay on uptime: a wall clock change (the phone setting the time) never moves them.
+static uint64_t prv_ticks_to_uptime_us(uint32_t ts) {
+  return pbl_clocksync_to_uptime_us(&s_dev->state->sync, ts);
 }
 
 //! Read the live timestamp counter between two uptime reads and feed the pair to the clock fit.
@@ -347,7 +345,7 @@ static void prv_emit_slot(void) {
     } else {
       memset(&st->out_buf[st->out_n][6], 0, 6);
     }
-    st->out_ts_us[st->out_n++] = prv_ticks_to_realtime_us(ts);
+    st->out_ts_us[st->out_n++] = prv_ticks_to_uptime_us(ts);
   }
   st->slot.valid = false;
 }

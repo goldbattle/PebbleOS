@@ -24,10 +24,10 @@ static void prv_edge(void *arg) {
   struct pbl_gpio_keys_key_state *state = arg;
 
   // Every edge restarts the debounce, so the timer is idle only on the first edge of a transition:
-  // that one is the physical press/release (the rest is contact bounce). pbl_realtime_us() only
+  // that one is the physical press/release (the rest is contact bounce). pbl_uptime_us() only
   // takes the IRQ lock, so it is fine here.
   if (!pbl_timer_is_active(&state->timer)) {
-    state->edge_us = pbl_realtime_us();
+    state->edge_us = pbl_uptime_us();
   }
   pbl_timer_start(&state->timer, PBL_MSEC(state->key->debounce_interval_ms));
 }
